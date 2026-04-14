@@ -5,7 +5,7 @@ import datetime
 import io
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V20", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V21", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -43,8 +43,10 @@ def apply_changes():
 # --- [보안, 로그인 및 세션 메모리] ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
-# 💡 [요청 반영] 현재 작업 중인 프로젝트 ID를 기억하는 메모리 추가
 if 'active_proj_id' not in st.session_state: st.session_state['active_proj_id'] = None
+# 💡 [요청 1,3번] 인라인 수정을 위한 메모리 추가
+if 'edit_d_id' not in st.session_state: st.session_state['edit_d_id'] = None
+if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
 
 def check_login(user_id, user_pw):
     _, _, _, _, _, users, _ = load_db_data()
@@ -163,7 +165,7 @@ with tabs[0]:
                 if st.form_submit_button("업무 추가", type="primary", disabled=is_locked):
                     final_task = n_task if sel_opt == "✏️ 직접 입력" else sel_opt
                     if final_task:
-                        supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": target_user, "보고서제외": False}).execute()
+                        supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": target_user, "보고서제외": False, "진행중": False}).execute()
                         apply_changes()
         else: 
             if u_role == "마스터" and view_target == "전체":
@@ -179,20 +181,43 @@ with tabs[0]:
                 if sel_p and sel_s:
                     p_info = next((p for p in proj_data if p.get('프로젝트명') == sel_p), {})
                     p_owner = p_info.get('담당자', target_user) if view_target == "전체" else target_user
-                    supabase.table('daily').insert({"날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", "분류": p_info.get('분류', '프로젝트'), "연결프로젝트": f"{sel_p}::{sel_s}", "KPI": p_info.get('KPI', '기타'), "담당자": p_owner, "보고서제외": False}).execute()
+                    supabase.table('daily').insert({"날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", "분류": p_info.get('분류', '프로젝트'), "연결프로젝트": f"{sel_p}::{sel_s}", "KPI": p_info.get('KPI', '기타'), "담당자": p_owner, "보고서제외": False, "진행중": False}).execute()
                     apply_changes()
 
     st.divider()
     
     for i, row in enumerate(filtered_daily):
         r_id = row.get('id', f"temp_d_{i}") 
-        col1, col2, col3, col4 = st.columns([4, 4, 1, 1])
+        
+        # 💡 [요청 1,3번] 인라인 편집 모드 (일일 업무)
+        if st.session_state.get('edit_d_id') == r_id:
+            with st.container(border=True):
+                st.write("🛠️ **업무 직접 수정**")
+                e_name = st.text_area("업무명 수정", row.get('업무명',''), height=80)
+                ec1, ec2 = st.columns(2)
+                e_cat_idx = cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0
+                e_kpi_idx = (my_kpi_opts + ["기타"]).index(row.get('KPI')) if row.get('KPI') in (my_kpi_opts + ["기타"]) else 0
+                e_cat = ec1.selectbox("분류 변경", cat_list, index=e_cat_idx, key=f"ec_{r_id}")
+                e_kpi = ec2.selectbox("KPI 변경", my_kpi_opts + ["기타"], index=e_kpi_idx, key=f"ek_{r_id}")
+                
+                eb1, eb2, _ = st.columns([1, 1, 4])
+                if eb1.button("저장", type="primary", key=f"esv_{r_id}"):
+                    supabase.table('daily').update({"업무명": e_name, "분류": e_cat, "KPI": e_kpi}).eq('id', r_id).execute()
+                    st.session_state['edit_d_id'] = None
+                    apply_changes()
+                if eb2.button("취소", key=f"ecan_{r_id}"):
+                    st.session_state['edit_d_id'] = None
+                    st.rerun()
+            continue # 편집 중이면 아래 렌더링 생략
+            
+        col1, col2, col3, col4, col5 = st.columns([4, 3, 1, 0.7, 0.7])
         disp_name = str(row.get('업무명','')).replace('\n', '<br>')
         badge = f" <small style='color:blue;'>[{row.get('담당자','')}]</small>" if u_role == "마스터" and view_target == "전체" else ""
         is_proj = str(row.get('프로젝트연동', 'FALSE')).upper() == "TRUE"
+        kpi_txt = f" <span style='color:#007BFF; font-size:0.85em;'>(KPI: {row.get('KPI', '미지정')})</span>"
         
         if is_proj: col1.markdown(f"**[{row.get('분류', '프로젝트')}]** <span style='color:#555;'>{str(row.get('연결프로젝트', '')).replace('::', ' > ')}</span>{badge}", unsafe_allow_html=True)
-        else: col1.markdown(f"**[{row.get('분류', '기타')}]** {disp_name}{badge}", unsafe_allow_html=True)
+        else: col1.markdown(f"**[{row.get('분류', '기타')}]** {disp_name}{kpi_txt}{badge}", unsafe_allow_html=True)
             
         cur_p = int(row.get('진행률', 0) if str(row.get('진행률', 0)).isdigit() else 0)
         new_p = col2.slider("진행", 0, 100, cur_p, 10, key=f"d_sld_{r_id}", label_visibility="collapsed", disabled=is_locked)
@@ -209,12 +234,16 @@ with tabs[0]:
                 apply_changes()
         
         is_ex = bool(row.get('보고서제외', False))
-        new_ex = col3.checkbox("🚫제외", value=is_ex, key=f"d_ex_{r_id}", help="체크 시 보고서에 출력 안됨", disabled=is_locked)
+        new_ex = col3.checkbox("🚫제외", value=is_ex, key=f"d_ex_{r_id}", disabled=is_locked)
         if not is_locked and new_ex != is_ex:
             supabase.table('daily').update({"보고서제외": new_ex}).eq('id', r_id).execute()
             apply_changes()
 
-        if col4.button("🗑️", key=f"d_del_{r_id}", disabled=is_locked):
+        if col4.button("✏️", key=f"d_edt_{r_id}", disabled=is_locked):
+            st.session_state['edit_d_id'] = r_id
+            st.rerun()
+
+        if col5.button("🗑️", key=f"d_del_{r_id}", disabled=is_locked):
             if isinstance(r_id, int) or str(r_id).isdigit():
                 supabase.table('daily').delete().eq('id', r_id).execute()
                 apply_changes()
@@ -279,39 +308,79 @@ with tabs[1]:
         total_p = sum(int(s.get('진행률', 0) if str(s.get('진행률',0)).isdigit() else 0) for s in my_s_list)
         avg_p = int(total_p / len(my_s_list)) if len(my_s_list) > 0 else 0
         
-        # 💡 [요청 적용] 현재 작업 중인 프로젝트면 창을 활짝 열어둡니다.
         is_expanded = (st.session_state.get('active_proj_id') == r_id)
         
-        with st.expander(f"📂 {pn} [{p.get('분류')}] - 📊 전체 진행률: {avg_p}% {owner}", expanded=is_expanded):
-            set_c1, set_c2 = st.columns(2)
+        # 💡 프로젝트 창 타이틀에 KPI 표시
+        with st.expander(f"📂 {pn} [{p.get('분류')}] (KPI: {p.get('KPI', '미지정')}) - 📊 전체 진행률: {avg_p}% {owner}", expanded=is_expanded):
+            set_c1, set_c2, set_c3 = st.columns([1.5, 1.5, 2])
             cur_ord = int(p.get('정렬순서', 999) if pd.notna(p.get('정렬순서')) else 999)
-            new_ord = set_c1.number_input("🔢 프로젝트 표출 순서 (숫자가 낮을수록 위로)", value=cur_ord, key=f"pord_{r_id}", disabled=is_locked)
+            new_ord = set_c1.number_input("🔢 순서", value=cur_ord, key=f"pord_{r_id}", disabled=is_locked)
             if not is_locked and new_ord != cur_ord:
                 supabase.table('projects').update({"정렬순서": new_ord}).eq('id', r_id).execute()
-                st.session_state['active_proj_id'] = r_id # 💡 기억하기
+                st.session_state['active_proj_id'] = r_id 
                 apply_changes()
                 
             p_ex = bool(p.get('보고서제외', False))
-            new_p_ex = set_c2.checkbox("🚫 이 프로젝트 전체를 보고서에서 제외", value=p_ex, key=f"pex_{r_id}", disabled=is_locked)
+            new_p_ex = set_c2.checkbox("🚫 전체 제외", value=p_ex, key=f"pex_{r_id}", disabled=is_locked)
             if not is_locked and new_p_ex != p_ex:
                 supabase.table('projects').update({"보고서제외": new_p_ex}).eq('id', r_id).execute()
-                st.session_state['active_proj_id'] = r_id # 💡 기억하기
+                st.session_state['active_proj_id'] = r_id 
                 apply_changes()
+
+            # 💡 [요청 3번] 프로젝트명 간편 수정 폼
+            with set_c3:
+                with st.form(key=f"ren_p_{r_id}"):
+                    ren_p = st.text_input("🛠️ 프로젝트명 수정", value=pn, label_visibility="collapsed", disabled=is_locked)
+                    if st.form_submit_button("이름 변경 적용", disabled=is_locked):
+                        if ren_p and ren_p != pn:
+                            supabase.table('projects').update({"프로젝트명": ren_p}).eq('id', r_id).execute()
+                            supabase.table('sub_tasks').update({"프로젝트명": ren_p}).eq('프로젝트명', pn).execute()
+                            for d in all_daily:
+                                p_link = str(d.get('연결프로젝트', ''))
+                                if p_link.startswith(pn + "::"):
+                                    new_link = p_link.replace(pn + "::", ren_p + "::", 1)
+                                    supabase.table('daily').update({"연결프로젝트": new_link}).eq('id', d.get('id')).execute()
+                            st.session_state['active_proj_id'] = r_id
+                            st.success("수정 완료!")
+                            apply_changes()
 
             st.write("---")
 
             with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
                 sc1, sc2 = st.columns([4,1])
-                new_sub = sc1.text_area("세부 업무명 (Alt+Enter: 줄바꿈 / Ctrl+Enter: 즉시 추가)", height=100, disabled=is_locked)
+                new_sub = sc1.text_area("세부 업무명 (Alt+Enter: 줄바꿈 / Ctrl+Enter: 즉시 추가)", height=80, disabled=is_locked)
                 if sc2.form_submit_button("하위 업무 추가", disabled=is_locked):
                     if new_sub:
-                        supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "담당자": target_user, "보고서제외": False}).execute()
-                        st.session_state['active_proj_id'] = r_id # 💡 기억하기 (창 닫힘 방지)
+                        supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "담당자": target_user, "보고서제외": False, "진행중": False}).execute()
+                        st.session_state['active_proj_id'] = r_id 
                         apply_changes()
                         
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id', f"temp_s_{j}")
-                sl1, sl2, sl3, sl4, sl5 = st.columns([4, 3, 1, 1, 1])
+                
+                # 💡 [요청 1,3번] 인라인 편집 모드 (하위 업무)
+                if st.session_state.get('edit_s_id') == s_id:
+                    with st.container(border=True):
+                        st.write("🛠️ **하위 업무 수정**")
+                        e_s_name = st.text_area("세부업무명 수정", s.get('세부업무명',''), height=80)
+                        eb1, eb2, _ = st.columns([1, 1, 4])
+                        if eb1.button("저장", type="primary", key=f"esv_s_{s_id}"):
+                            supabase.table('sub_tasks').update({"세부업무명": e_s_name}).eq('id', s_id).execute()
+                            old_s_name = s.get('세부업무명')
+                            for d in all_daily:
+                                if d.get('연결프로젝트') == f"{pn}::{old_s_name}":
+                                    supabase.table('daily').update({"연결프로젝트": f"{pn}::{e_s_name}", "업무명": e_s_name}).eq('id', d.get('id')).execute()
+                            st.session_state['edit_s_id'] = None
+                            st.session_state['active_proj_id'] = r_id
+                            apply_changes()
+                        if eb2.button("취소", key=f"ecan_s_{s_id}"):
+                            st.session_state['edit_s_id'] = None
+                            st.session_state['active_proj_id'] = r_id
+                            st.rerun()
+                    continue
+                
+                # 💡 [요청 2번] 진행중 체크박스(▶️) 추가 및 열 비율 조정
+                sl1, sl2, sl3, sl4, sl5, sl6, sl7 = st.columns([3.5, 2.5, 1, 1.2, 1, 0.6, 0.6])
                 sl1.markdown(f"· {str(s.get('세부업무명','')).replace('\n','<br>')}", unsafe_allow_html=True)
                 
                 cur_sp = int(s.get('진행률',0) if str(s.get('진행률',0)).isdigit() else 0)
@@ -319,26 +388,39 @@ with tabs[1]:
                 if not is_locked and sp != cur_sp:
                     if isinstance(s_id, int) or str(s_id).isdigit():
                         supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s_id).execute()
-                        st.session_state['active_proj_id'] = r_id # 💡 기억하기
+                        st.session_state['active_proj_id'] = r_id 
                         apply_changes()
                 
                 if sl3.button("✅완료", key=f"sdone_{s_id}", disabled=is_locked):
                      if isinstance(s_id, int) or str(s_id).isdigit():
                         supabase.table('sub_tasks').update({"진행률": 100}).eq('id', s_id).execute()
-                        st.session_state['active_proj_id'] = r_id # 💡 기억하기
+                        st.session_state['active_proj_id'] = r_id 
                         apply_changes()
 
+                # 💡 진행중 스위치 로직
+                s_prog = bool(s.get('진행중', False))
+                s_new_prog = sl4.checkbox("▶️진행중", value=s_prog, key=f"s_prg_{s_id}", disabled=is_locked)
+                if not is_locked and s_new_prog != s_prog:
+                    supabase.table('sub_tasks').update({"진행중": s_new_prog}).eq('id', s_id).execute()
+                    st.session_state['active_proj_id'] = r_id 
+                    apply_changes()
+
                 s_ex = bool(s.get('보고서제외', False))
-                s_new_ex = sl4.checkbox("🚫제외", value=s_ex, key=f"s_ex_{s_id}", disabled=is_locked)
+                s_new_ex = sl5.checkbox("🚫제외", value=s_ex, key=f"s_ex_{s_id}", disabled=is_locked)
                 if not is_locked and s_new_ex != s_ex:
                     supabase.table('sub_tasks').update({"보고서제외": s_new_ex}).eq('id', s_id).execute()
-                    st.session_state['active_proj_id'] = r_id # 💡 기억하기
+                    st.session_state['active_proj_id'] = r_id 
                     apply_changes()
                 
-                if sl5.button("🗑️", key=f"sdel_{s_id}", disabled=is_locked):
+                if sl6.button("✏️", key=f"sedt_{s_id}", disabled=is_locked):
+                    st.session_state['edit_s_id'] = s_id
+                    st.session_state['active_proj_id'] = r_id
+                    st.rerun()
+
+                if sl7.button("🗑️", key=f"sdel_{s_id}", disabled=is_locked):
                     if isinstance(s_id, int) or str(s_id).isdigit():
                         supabase.table('sub_tasks').delete().eq('id', s_id).execute()
-                        st.session_state['active_proj_id'] = r_id # 💡 기억하기
+                        st.session_state['active_proj_id'] = r_id 
                         apply_changes()
             
             st.write("---")
@@ -346,12 +428,12 @@ with tabs[1]:
             if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked):
                 if isinstance(r_id, int) or str(r_id).isdigit():
                     supabase.table('projects').update({"보관함이동": True}).eq('id', r_id).execute()
-                    st.session_state['active_proj_id'] = None # 보관함으로 갔으니 기억 삭제
+                    st.session_state['active_proj_id'] = None 
                     apply_changes()
             if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_id}", disabled=is_locked):
                 if isinstance(r_id, int) or str(r_id).isdigit():
                     supabase.table('projects').delete().eq('id', r_id).execute()
-                    st.session_state['active_proj_id'] = None # 삭제했으니 기억 삭제
+                    st.session_state['active_proj_id'] = None 
                     apply_changes()
 
 # ==========================================
@@ -445,7 +527,7 @@ with tab_rep:
     st.divider()
     st.subheader("📥 과거 업무 일괄 업로드 (Excel)")
     
-    temp_df = pd.DataFrame(columns=["날짜", "업무명", "진행률", "프로젝트연동", "분류", "연결프로젝트", "KPI", "담당자", "보고서제외"])
+    temp_df = pd.DataFrame(columns=["날짜", "업무명", "진행률", "프로젝트연동", "분류", "연결프로젝트", "KPI", "담당자", "보고서제외", "진행중"])
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
         temp_df.to_excel(writer, index=False)
@@ -495,7 +577,13 @@ with tab_rep:
         for t in rep_daily:
             is_proj = str(t.get('프로젝트연동', 'FALSE')).upper() == "TRUE"
             prog = int(t.get('진행률', 0) if str(t.get('진행률',0)).isdigit() else 0)
-            prog_txt = "(완료)" if prog == 100 else f"({prog}%)"
+            
+            # 💡 [요청 2번] 보고서에 진행중(▶) 마킹 적용
+            is_in_prog = bool(t.get('진행중', False))
+            prog_txt = f"({prog}%)"
+            if is_in_prog: prog_txt += " <span style='color:#E65100; font-weight:bold;'>▶(현재진행중)</span>"
+            if prog == 100: prog_txt = "(완료)"
+            
             task_name = str(t.get('업무명','')).replace(chr(10), '<br>')
             
             if is_proj:
@@ -530,8 +618,15 @@ with tab_rep:
             h_p_html += f"<div style='margin-top:15px;'><h4 style='margin-bottom:5px;'>■ [{p.get('분류','기타')}] {pn} <span style='color:#2e7d32;'>{st_txt}</span></h4><ul style='margin-top:0;'>"
             for s in valid_subs:
                 prog = int(s.get('진행률',0))
-                icon = "✓" if prog==100 else ("▶" if prog>0 else "□")
-                h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%)</li>"
+                
+                # 💡 [요청 2번] 보고서에 진행중(▶) 마킹 적용
+                is_in_prog = bool(s.get('진행중', False))
+                prog_txt = f"({prog}%)"
+                if is_in_prog: prog_txt += " <span style='color:#E65100; font-weight:bold;'>▶(현재진행중)</span>"
+                if prog == 100: prog_txt = "(완료)"
+                
+                icon = "✓" if prog==100 else "▶"
+                h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} {prog_txt}</li>"
             h_p_html += "</ul></div>"
             
         full_html = f"<html><body style='font-family:sans-serif;'><h2>[{r_s}] {title_txt}</h2><h3>■ 일일 업무</h3><ul style='line-height:1.5;'>{h_d_html}</ul><hr><h3>■ 고정 업무 (루틴)</h3><ul style='line-height:1.5;'>{h_r_html}</ul><hr><h3>■ 프로젝트 현황</h3>{h_p_html}</body></html>"
