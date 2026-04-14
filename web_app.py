@@ -9,11 +9,11 @@ from streamlit_cookies_controller import CookieController
 # 1. 웹페이지 설정
 st.set_page_config(page_title="NOWSYSTEM 관제탑 V31", layout="wide")
 
-# 💡 쿠키 컨트롤러 초기화 (에러 방어 로직 추가)
+# 💡 쿠키 컨트롤러 초기화 (로그인 풀림 방지)
 cookie_controller = CookieController()
 if 'cookie_init' not in st.session_state:
     st.session_state['cookie_init'] = True
-    time.sleep(0.3) 
+    time.sleep(0.3) # 쿠키 로딩을 위한 안전 대기 시간
     st.rerun()
 
 # 2. 수파베이스 DB 연결
@@ -65,7 +65,6 @@ def check_login(user_id, user_pw):
             return True
     return False
 
-# 💡 [핵심 수정] 쿠키를 불러올 때 에러가 나면 무시하는 방어막(try-except) 설치
 if not st.session_state['logged_in']:
     try:
         saved_id = cookie_controller.get('now_id')
@@ -74,7 +73,7 @@ if not st.session_state['logged_in']:
             if check_login(saved_id, saved_pw):
                 st.rerun()
     except Exception:
-        pass # 쿠키가 준비되지 않았으면 부드럽게 패스
+        pass
 
 if not st.session_state['logged_in']:
     st.markdown("<h1 style='text-align: center;'>🔒 NOWSYSTEM 관제탑</h1>", unsafe_allow_html=True)
@@ -85,7 +84,6 @@ if not st.session_state['logged_in']:
             in_pw = st.text_input("비밀번호", type="password")
             if st.form_submit_button("접속하기", use_container_width=True):
                 if check_login(in_id, in_pw):
-                    # 💡 쿠키 저장 시에도 에러 방어
                     try:
                         cookie_controller.set('now_id', in_id)
                         cookie_controller.set('now_pw', in_pw)
@@ -108,7 +106,11 @@ sub_data = sorted(sub_data, key=lambda x: int(x.get('id') or 0))
 cat_list = sorted(list(set([str(c.get('분류명') or '') for c in cat_data if pd.notna(c.get('분류명')) and str(c.get('분류명') or '').strip() != ""])))
 if not cat_list: cat_list = ["경영관리", "재무업무", "기타"]
 
-t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today())
+# 💡 [핵심 수정] 서버 위치와 상관없이 무조건 한국 표준시(KST, UTC+9)로 '오늘'을 계산합니다!
+KST = datetime.timezone(datetime.timedelta(hours=9))
+today_kst = datetime.datetime.now(KST).date()
+
+t_date = st.date_input("📅 업무 기준일 선택", value=today_kst)
 t_str = t_date.strftime("%Y-%m-%d")
 
 # --- [사이드바 & 타겟 유저 결정] ---
@@ -162,7 +164,6 @@ with st.sidebar:
 
     st.divider()
     if st.button("🚪 로그아웃", use_container_width=True): 
-        # 💡 쿠키 삭제 시에도 에러 방어
         try:
             cookie_controller.remove('now_id')
             cookie_controller.remove('now_pw')
@@ -351,8 +352,9 @@ with tabs[1]:
                 pc1, pc2 = st.columns(2)
                 p_name = pc1.text_input("프로젝트명", disabled=disable_edit)
                 p_cat = pc2.selectbox("분류", cat_list, disabled=disable_edit) 
-                p_start = pc1.date_input("시작일", disabled=disable_edit)
-                p_end = pc2.date_input("완료일", disabled=disable_edit)
+                # 💡 [핵심 수정] 프로젝트 기본 날짜도 한국 시간으로!
+                p_start = pc1.date_input("시작일", value=today_kst, disabled=disable_edit)
+                p_end = pc2.date_input("완료일", value=today_kst, disabled=disable_edit)
                 p_kpi = pc1.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=disable_edit)
                 
                 if st.form_submit_button("프로젝트 저장", type="primary", disabled=disable_edit):
@@ -399,7 +401,7 @@ with tabs[1]:
 
             cur_end_str = str(p.get("완료일") or t_str)
             try: cur_end_date = datetime.datetime.strptime(cur_end_str, "%Y-%m-%d").date()
-            except: cur_end_date = datetime.date.today()
+            except: cur_end_date = today_kst # 💡 한국 시간
             
             new_end = set_c2.date_input("🏁 완료일 수정", value=cur_end_date, key=f"pend_edt_{r_id}", disabled=disable_edit)
             if not disable_edit and str(new_end) != cur_end_str:
@@ -652,7 +654,8 @@ with tab_rep:
     r_type = st.radio("보고서 종류 선택", ["일일(HTML)", "기간별(Excel)"], horizontal=True)
     
     if r_type == "일일(HTML)":
-        r_d = st.date_input("보고 날짜", t_date, key="r_date_p")
+        # 💡 [요청 수정] 보고서 날짜의 기본값도 한국 시간(today_kst)으로 맞춥니다.
+        r_d = st.date_input("보고 날짜", today_kst, key="r_date_p")
         r_s = r_d.strftime("%Y-%m-%d")
         
         if u_role == "마스터" and target_user == "전체":
@@ -719,7 +722,8 @@ with tab_rep:
 
     elif r_type == "기간별(Excel)":
         c_ds1, c_ds2 = st.columns(2)
-        s_w, e_w = c_ds1.date_input("시작일", t_date - datetime.timedelta(days=7), key="ws"), c_ds2.date_input("종료일", t_date, key="we")
+        # 💡 [요청 수정] 기간별 엑셀 날짜의 기본값도 한국 시간(today_kst)으로 맞춥니다.
+        s_w, e_w = c_ds1.date_input("시작일", today_kst - datetime.timedelta(days=7), key="ws"), c_ds2.date_input("종료일", today_kst, key="we")
         rep_proj = [p for p in proj_data if target_user == "전체" or p.get('담당자') == target_user]
         xls_hr = ""
         for p in rep_proj:
