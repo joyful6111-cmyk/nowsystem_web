@@ -6,9 +6,9 @@ import io
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V25", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V26", layout="wide")
 
-# 💡 [요청 1번] 쿠키(기억력) 컨트롤러 실행
+# 쿠키 컨트롤러
 cookie_controller = CookieController()
 
 # 2. 수파베이스 DB 연결
@@ -60,7 +60,6 @@ def check_login(user_id, user_pw):
             return True
     return False
 
-# 💡 [요청 1번] 쿠키에 저장된 아이디/비밀번호가 있으면 자동 로그인 수행
 if not st.session_state['logged_in']:
     saved_id = cookie_controller.get('now_id')
     saved_pw = cookie_controller.get('now_pw')
@@ -77,7 +76,6 @@ if not st.session_state['logged_in']:
             in_pw = st.text_input("비밀번호", type="password")
             if st.form_submit_button("접속하기", use_container_width=True):
                 if check_login(in_id, in_pw):
-                    # 💡 [요청 1번] 로그인 성공 시 쿠키에 정보 저장
                     cookie_controller.set('now_id', in_id)
                     cookie_controller.set('now_pw', in_pw)
                     st.rerun()
@@ -134,7 +132,6 @@ with st.sidebar:
 
     st.divider()
     if st.button("🚪 로그아웃", use_container_width=True): 
-        # 💡 [요청 1번] 로그아웃 시 쿠키 정보 싹 지우기
         cookie_controller.remove('now_id')
         cookie_controller.remove('now_pw')
         st.session_state['logged_in'] = False
@@ -142,7 +139,7 @@ with st.sidebar:
 
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 
-if view_target == "전체":
+if u_role == "마스터" and view_target == "전체":
     my_kpi_opts = sorted(list(set([str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('KPI명')).strip() != ""])))
 else:
     my_kpi_opts = sorted(list(set([str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분', '공통')).strip() in ['공통', target_user] and str(k.get('KPI명')).strip() != ""])))
@@ -171,7 +168,6 @@ for s in sub_data:
 with tabs[0]:
     header_title = f"📝 {t_str} {target_user} 업무 리스트" if view_target != "전체" else f"📝 {t_str} 전사 업무 리스트"
     st.header(header_title)
-    dropdown_opts = [k.get('KPI명', '') for k in kpi_config if k.get('KPI명')]
     
     with st.expander("➕ 오늘의 업무 추가", expanded=not is_locked):
         task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True, disabled=is_locked)
@@ -192,7 +188,6 @@ with tabs[0]:
                         supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": target_user, "보고서제외": False, "진행중": False}).execute()
                         apply_changes()
         else: 
-            # 💡 [요청 2번] 프로젝트 당겨올 때도 '시작일'이 지난(혹은 같은) 프로젝트만 드롭다운에 표시
             if u_role == "마스터" and view_target == "전체":
                 my_projs = [p.get('프로젝트명') for p in proj_data if not (str(p.get('보관함이동')).upper() == "TRUE" or p.get('보관함이동') == True) and str(p.get('시작일', '')) <= t_str]
             else:
@@ -306,11 +301,8 @@ with tabs[1]:
             pc1, pc2 = st.columns(2)
             p_name = pc1.text_input("프로젝트명", disabled=is_locked)
             p_cat = pc2.selectbox("분류", cat_list, disabled=is_locked) 
-            
-            # 💡 [요청 2번] 완료일 입력 추가
             p_start = pc1.date_input("시작일", disabled=is_locked)
             p_end = pc2.date_input("완료일", disabled=is_locked)
-            
             p_kpi = pc1.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=is_locked)
             
             if st.form_submit_button("프로젝트 저장", type="primary", disabled=is_locked):
@@ -330,7 +322,6 @@ with tabs[1]:
             
         if is_archived_bool: continue
         
-        # 💡 [요청 2번] 시작일이 현재 날짜(t_str)보다 미래인 프로젝트는 화면에 숨김 처리
         p_start_str = str(p.get("시작일", ""))
         if p_start_str and p_start_str > t_str: continue
             
@@ -454,7 +445,6 @@ with tabs[1]:
             st.write("---")
             ac1, ac2, ac3 = st.columns([2,1,1])
             
-            # 💡 [요청 2번] 완료일이 지난 후에만 '보관함 이동' 가능하게 조건 추가
             p_end_str = str(p.get("완료일", ""))
             can_archive = True
             if p_end_str and t_str < p_end_str:
@@ -519,17 +509,23 @@ if u_role == "마스터":
             apply_changes()
 
 # ==========================================
-# KPI 현황 탭 
+# KPI 현황 탭 (💡 V26 핵심 수정: 개인 데이터 완벽 분리)
 # ==========================================
 with tab_kpi:
     st.header(f"📈 {target_user} KPI 현황" if view_target != "전체" else "📈 전사 통합 KPI (개별 카운트)")
     stats = {}
     for d in all_daily:
-        if view_target != "전체" and d.get('담당자') != target_user: continue
-        k_name = str(d.get('KPI', '기타')).strip()
         owner = str(d.get('담당자', '알수없음'))
         
-        if view_target == "전체":
+        # 💡 [핵심 보안] 일반 직원은 무조건 본인 데이터만 볼 수 있음
+        if u_role != "마스터" and owner != u_name: continue
+        # 💡 마스터가 특정 직원을 선택했을 경우, 그 직원의 데이터만
+        if u_role == "마스터" and view_target != "전체" and owner != target_user: continue
+        
+        k_name = str(d.get('KPI', '기타')).strip()
+        
+        # '전체' 보기일 경우 [이름] KPI명 형태로 분리하여 카운트
+        if u_role == "마스터" and view_target == "전체":
             stat_key = f"[{owner}] {k_name}"
         else:
             stat_key = k_name
