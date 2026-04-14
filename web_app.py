@@ -4,7 +4,7 @@ from supabase import create_client, Client
 import datetime
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V17", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V18", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -68,32 +68,46 @@ u_info = st.session_state['user_info']
 u_name = u_info.get('이름', '사용자')
 u_role = u_info.get('권한', '일반')
 
-# --- [데이터 할당 및 💡 정렬 처리] ---
+# --- [데이터 할당 및 정렬] ---
 all_daily, proj_data, sub_data, routine_data, kpi_config, user_data, cat_data = load_db_data()
 
-# 프로젝트 정렬: 생성된 순서(id)대로 고정 (요청 4번)
-proj_data = sorted(proj_data, key=lambda x: int(x.get('id', 0)))
+# 💡 [요청 7번] 프로젝트 정렬: '정렬순서' 번호가 낮은 것부터, 그다음은 만들어진(id) 순서대로 고정
+proj_data = sorted(proj_data, key=lambda x: (int(x.get('정렬순서', 999)), int(x.get('id', 0))))
 sub_data = sorted(sub_data, key=lambda x: int(x.get('id', 0)))
 
 cat_list = sorted(list(set([str(c.get('분류명', '')) for c in cat_data if pd.notna(c.get('분류명')) and str(c.get('분류명')).strip() != ""])))
 if not cat_list: cat_list = ["경영관리", "재무업무", "기타"]
-
 my_kpi_opts = [str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분', '공통')).strip() in ['공통', u_name] and str(k.get('KPI명')).strip() != ""]
+
+st.title("🚀 NOWSYSTEM 통합 업무 관리")
+t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today(), key="main_date")
+t_str = t_date.strftime("%Y-%m-%d")
+
+# 💡 [요청 3번] 일과 마감 잠금 기능 설정
+if f"lock_{t_str}" not in st.session_state: st.session_state[f"lock_{t_str}"] = False
+is_locked = st.session_state[f"lock_{t_str}"]
 
 # --- [사이드바] ---
 with st.sidebar:
     st.subheader(f"👤 {u_name}님 ({u_role})")
     if st.button("🔄 최신 데이터 불러오기", use_container_width=True, type="primary"): apply_changes()
     st.divider()
+    
+    # 💡 [요청 3번] 마감 & 마감 취소 버튼
+    if is_locked:
+        st.success("🔒 현재 업무가 마감되었습니다. (수정 불가)")
+        if st.button("🔓 일과 마감 취소", use_container_width=True):
+            st.session_state[f"lock_{t_str}"] = False
+            st.rerun()
+    else:
+        if st.button("🔒 일과 마감하기", use_container_width=True, type="primary"):
+            st.session_state[f"lock_{t_str}"] = True
+            st.rerun()
+            
+    st.divider()
     if st.button("🚪 로그아웃", use_container_width=True): 
         st.session_state['logged_in'] = False
         st.rerun()
-
-st.title("🚀 NOWSYSTEM 통합 업무 관리")
-t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today(), key="main_date")
-t_str = t_date.strftime("%Y-%m-%d")
-
-is_locked = False
 
 if u_role == "마스터":
     filtered_daily = [d for d in all_daily if str(d.get('날짜')) == t_str]
@@ -116,31 +130,33 @@ with tabs[0]:
     st.header(f"📝 {t_str} 업무 리스트")
     dropdown_opts = [k.get('KPI명', '') for k in kpi_config if k.get('KPI명')]
     
-    # 💡 폼 초기화 적용 (Enter 키 지원 및 입력 후 공백화 - 요청 2, 3번)
-    task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True)
-    if task_type == "일반/데일리 업무":
-        with st.form("add_daily_normal_form", clear_on_submit=True):
-            my_routines = [r.get('업무명') for r in routine_data if r.get('담당자') == u_name]
-            sel_opt = st.selectbox("업무명", ["✏️ 직접 입력"] + my_routines)
-            n_task = st.text_input("새 업무명 (직접 입력)") 
+    with st.expander("➕ 오늘의 업무 추가", expanded=not is_locked):
+        task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True, disabled=is_locked)
+        
+        if task_type == "일반/데일리 업무":
+            with st.form("add_daily_normal_form", clear_on_submit=True):
+                my_routines = [r.get('업무명') for r in routine_data if r.get('담당자') == u_name]
+                sel_opt = st.selectbox("업무명 (루틴에서 선택)", ["✏️ 직접 입력"] + my_routines, disabled=is_locked)
+                # 💡 [요청 6번] 다중 줄 입력창 적용 (최대 10줄)
+                n_task = st.text_area("새 업무명 (직접 입력 시: Alt+Enter 줄바꿈, Ctrl+Enter 저장)", height=100, disabled=is_locked) 
+                    
+                c1, c2 = st.columns(2)
+                n_cat = c1.selectbox("분류", cat_list, disabled=is_locked) 
+                n_kpi = c2.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
                 
-            c1, c2 = st.columns(2)
-            n_cat = c1.selectbox("분류", cat_list) 
-            n_kpi = c2.selectbox("연관 KPI", dropdown_opts + ["기타"])
-            
-            if st.form_submit_button("업무 추가", type="primary"):
-                final_task = n_task if sel_opt == "✏️ 직접 입력" else sel_opt
-                if final_task:
-                    supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": u_name, "보고서제외": False}).execute()
-                    apply_changes()
-    else: 
-        with st.form("add_daily_proj_form", clear_on_submit=True):
+                if st.form_submit_button("업무 추가", type="primary", disabled=is_locked):
+                    final_task = n_task if sel_opt == "✏️ 직접 입력" else sel_opt
+                    if final_task:
+                        supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": u_name, "보고서제외": False}).execute()
+                        apply_changes()
+        else: 
+            # 💡 [요청 1번] 폼(Form)을 제거하여, 프로젝트 선택 시 즉각 하위업무가 갱신되도록 해결!
             my_projs = [p.get('프로젝트명') for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name) and not (str(p.get('보관함이동')).upper() == "TRUE" or p.get('보관함이동') == True)]
-            sel_p = st.selectbox("진행 중인 프로젝트", my_projs) if my_projs else None
+            sel_p = st.selectbox("진행 중인 프로젝트", my_projs, disabled=is_locked) if my_projs else None
             my_subs = [s.get('세부업무명') for s in sub_data if s.get('프로젝트명') == sel_p] if sel_p else []
-            sel_s = st.selectbox("프로젝트 하위 세부업무", my_subs) if my_subs else None
+            sel_s = st.selectbox("프로젝트 하위 세부업무", my_subs, disabled=is_locked) if my_subs else None
             
-            if st.form_submit_button("프로젝트 업무 당겨오기", type="primary"):
+            if st.button("프로젝트 업무 당겨오기", type="primary", disabled=is_locked):
                 if sel_p and sel_s:
                     p_info = next((p for p in proj_data if p.get('프로젝트명') == sel_p), {})
                     supabase.table('daily').insert({"날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", "분류": p_info.get('분류', '프로젝트'), "연결프로젝트": f"{sel_p}::{sel_s}", "KPI": p_info.get('KPI', '기타'), "담당자": u_name, "보고서제외": False}).execute()
@@ -148,7 +164,6 @@ with tabs[0]:
 
     st.divider()
     
-    # 일과 목록
     for i, row in enumerate(filtered_daily):
         r_id = row.get('id', f"temp_d_{i}") 
         col1, col2, col3, col4 = st.columns([4, 4, 1, 1])
@@ -160,9 +175,9 @@ with tabs[0]:
         else: col1.markdown(f"**[{row.get('분류', '기타')}]** {disp_name}{badge}", unsafe_allow_html=True)
             
         cur_p = int(row.get('진행률', 0) if str(row.get('진행률', 0)).isdigit() else 0)
-        new_p = col2.slider("진행", 0, 100, cur_p, 10, key=f"d_sld_{r_id}", label_visibility="collapsed")
+        new_p = col2.slider("진행", 0, 100, cur_p, 10, key=f"d_sld_{r_id}", label_visibility="collapsed", disabled=is_locked)
         
-        if new_p != cur_p:
+        if not is_locked and new_p != cur_p:
             if isinstance(r_id, int) or str(r_id).isdigit():
                 supabase.table('daily').update({"진행률": new_p}).eq('id', r_id).execute()
                 if is_proj:
@@ -173,28 +188,26 @@ with tabs[0]:
                         if s_id_match: supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s_id_match).execute()
                 apply_changes()
         
-        # 💡 보고서 제외 토글 (요청 7번)
         is_ex = bool(row.get('보고서제외', False))
-        new_ex = col3.checkbox("🚫제외", value=is_ex, key=f"d_ex_{r_id}", help="체크 시 보고서에 출력되지 않습니다.")
-        if new_ex != is_ex:
+        new_ex = col3.checkbox("🚫제외", value=is_ex, key=f"d_ex_{r_id}", help="체크 시 보고서에 출력 안됨", disabled=is_locked)
+        if not is_locked and new_ex != is_ex:
             supabase.table('daily').update({"보고서제외": new_ex}).eq('id', r_id).execute()
             apply_changes()
 
-        if col4.button("🗑️", key=f"d_del_{r_id}"):
+        if col4.button("🗑️", key=f"d_del_{r_id}", disabled=is_locked):
             if isinstance(r_id, int) or str(r_id).isdigit():
                 supabase.table('daily').delete().eq('id', r_id).execute()
                 apply_changes()
 
     st.write("---")
-    # 💡 고정 업무 가시성 확대 (요청 6번)
     st.subheader("📌 나의 데일리 고정 업무 (루틴)")
     c_r1, c_r2 = st.columns([1, 1])
     with c_r1:
         with st.form("add_routine_form", clear_on_submit=True):
-            r_task = st.text_input("새 데일리 업무명 등록")
-            r_cat = st.selectbox("분류", cat_list) 
-            r_kpi = st.selectbox("연관 KPI", dropdown_opts + ["기타"])
-            if st.form_submit_button("루틴 목록에 추가"):
+            r_task = st.text_input("새 데일리 업무명 등록", disabled=is_locked)
+            r_cat = st.selectbox("분류", cat_list, disabled=is_locked) 
+            r_kpi = st.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
+            if st.form_submit_button("루틴 목록에 추가", disabled=is_locked):
                 if r_task:
                     supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "KPI": r_kpi, "담당자": u_name}).execute()
                     apply_changes()
@@ -204,7 +217,7 @@ with tabs[0]:
                 r_id = r.get('id', f"temp_r_{i}")
                 rr1, rr2 = st.columns([4, 1])
                 rr1.write(f"· [{r.get('분류')}] {r.get('업무명')}")
-                if rr2.button("삭제", key=f"rdel_{r_id}"):
+                if rr2.button("삭제", key=f"rdel_{r_id}", disabled=is_locked):
                     if isinstance(r_id, int) or str(r_id).isdigit():
                         supabase.table('routines').delete().eq('id', r_id).execute()
                         apply_changes()
@@ -215,17 +228,15 @@ with tabs[0]:
 with tabs[1]:
     st.header("📁 프로젝트 현황")
     with st.expander("✨ 신규 프로젝트 등록", expanded=False):
-        # 💡 폼 초기화 적용 (요청 3번)
         with st.form("new_proj_form", clear_on_submit=True):
             pc1, pc2 = st.columns(2)
-            p_name = pc1.text_input("프로젝트명")
-            p_cat = pc2.selectbox("분류", cat_list) 
-            p_start = pc1.date_input("시작일")
-            p_kpi = pc2.selectbox("연관 KPI", dropdown_opts + ["기타"])
-            
-            if st.form_submit_button("프로젝트 저장", type="primary"):
+            p_name = pc1.text_input("프로젝트명", disabled=is_locked)
+            p_cat = pc2.selectbox("분류", cat_list, disabled=is_locked) 
+            p_start = pc1.date_input("시작일", disabled=is_locked)
+            p_kpi = pc2.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
+            if st.form_submit_button("프로젝트 저장", type="primary", disabled=is_locked):
                 if p_name:
-                    supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "분류": p_cat, "KPI": p_kpi, "담당자": u_name}).execute()
+                    supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "분류": p_cat, "KPI": p_kpi, "담당자": u_name, "정렬순서": 999, "보고서제외": False}).execute()
                     st.success(f"[{p_name}] 저장 완료!")
                     apply_changes()
 
@@ -238,16 +249,32 @@ with tabs[1]:
         owner = f" ({p.get('담당자','')})" if u_role == "마스터" else ""
         my_s_list = sub_dict.get(pn, [])
         
-        # 💡 프로젝트 전체 진행률 계산 (요청 1번)
         total_p = sum(int(s.get('진행률', 0) if str(s.get('진행률',0)).isdigit() else 0) for s in my_s_list)
         avg_p = int(total_p / len(my_s_list)) if len(my_s_list) > 0 else 0
         
         with st.expander(f"📂 {pn} [{p.get('분류')}] - 📊 전체 진행률: {avg_p}% {owner}"):
-            # 💡 엔터키 및 폼 초기화 적용 (요청 2, 3번)
+            
+            # 💡 [요청 4, 7번] 프로젝트 설정란 추가 (정렬순서 및 전체 보고서 제외)
+            set_c1, set_c2 = st.columns(2)
+            cur_ord = int(p.get('정렬순서', 999) if pd.notna(p.get('정렬순서')) else 999)
+            new_ord = set_c1.number_input("🔢 프로젝트 표출 순서 (숫자가 낮을수록 위로)", value=cur_ord, key=f"pord_{r_id}", disabled=is_locked)
+            if not is_locked and new_ord != cur_ord:
+                supabase.table('projects').update({"정렬순서": new_ord}).eq('id', r_id).execute()
+                apply_changes()
+                
+            p_ex = bool(p.get('보고서제외', False))
+            new_p_ex = set_c2.checkbox("🚫 이 프로젝트 전체를 보고서에서 제외", value=p_ex, key=f"pex_{r_id}", disabled=is_locked)
+            if not is_locked and new_p_ex != p_ex:
+                supabase.table('projects').update({"보고서제외": new_p_ex}).eq('id', r_id).execute()
+                apply_changes()
+
+            st.write("---")
+
+            # 💡 [요청 6번] 다중 줄 입력창 적용 (Ctrl+Enter 전송 지원)
             with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
                 sc1, sc2 = st.columns([4,1])
-                new_sub = sc1.text_input("세부 업무명 (입력 후 Enter)")
-                if sc2.form_submit_button("하위 업무 추가"):
+                new_sub = sc1.text_area("세부 업무명 (Alt+Enter: 줄바꿈 / Ctrl+Enter: 즉시 추가)", height=100, disabled=is_locked)
+                if sc2.form_submit_button("하위 업무 추가", disabled=is_locked):
                     if new_sub:
                         supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "담당자": u_name, "보고서제외": False}).execute()
                         apply_changes()
@@ -258,48 +285,45 @@ with tabs[1]:
                 sl1.markdown(f"· {str(s.get('세부업무명','')).replace('\n','<br>')}", unsafe_allow_html=True)
                 
                 cur_sp = int(s.get('진행률',0) if str(s.get('진행률',0)).isdigit() else 0)
-                sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s_id}", label_visibility="collapsed")
-                if sp != cur_sp:
+                sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s_id}", label_visibility="collapsed", disabled=is_locked)
+                if not is_locked and sp != cur_sp:
                     if isinstance(s_id, int) or str(s_id).isdigit():
                         supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s_id).execute()
                         apply_changes()
                 
-                # 💡 완료 버튼 처리 (요청 1번)
-                if sl3.button("✅완료", key=f"sdone_{s_id}"):
+                if sl3.button("✅완료", key=f"sdone_{s_id}", disabled=is_locked):
                      if isinstance(s_id, int) or str(s_id).isdigit():
                         supabase.table('sub_tasks').update({"진행률": 100}).eq('id', s_id).execute()
                         apply_changes()
 
-                # 💡 보고서 제외 (요청 7번)
                 s_ex = bool(s.get('보고서제외', False))
-                s_new_ex = sl4.checkbox("🚫제외", value=s_ex, key=f"s_ex_{s_id}")
-                if s_new_ex != s_ex:
+                s_new_ex = sl4.checkbox("🚫제외", value=s_ex, key=f"s_ex_{s_id}", disabled=is_locked)
+                if not is_locked and s_new_ex != s_ex:
                     supabase.table('sub_tasks').update({"보고서제외": s_new_ex}).eq('id', s_id).execute()
                     apply_changes()
                 
-                if sl5.button("🗑️", key=f"sdel_{s_id}"):
+                if sl5.button("🗑️", key=f"sdel_{s_id}", disabled=is_locked):
                     if isinstance(s_id, int) or str(s_id).isdigit():
                         supabase.table('sub_tasks').delete().eq('id', s_id).execute()
                         apply_changes()
             
             st.write("---")
             ac1, ac2, ac3 = st.columns([2,1,1])
-            if ac2.button("📦 보관함 이동", key=f"arc_{r_id}"):
+            if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked):
                 if isinstance(r_id, int) or str(r_id).isdigit():
                     supabase.table('projects').update({"보관함이동": True}).eq('id', r_id).execute()
                     apply_changes()
-            if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_id}"):
+            if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_id}", disabled=is_locked):
                 if isinstance(r_id, int) or str(r_id).isdigit():
                     supabase.table('projects').delete().eq('id', r_id).execute()
                     apply_changes()
 
 # ==========================================
-# 탭 3 & 4: 설정 탭 
+# 탭 3 & 4: 설정 탭 (마스터)
 # ==========================================
 if u_role == "마스터":
     with tab_set1:
         st.header("⚙️ 설정 1 (사내 계정 및 KPI 관리)")
-        # (이전과 동일 로직)
         c1, c2 = st.columns(2)
         with c1:
             u_df = pd.DataFrame(user_data)
@@ -362,24 +386,20 @@ with tab_kpi:
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 5: 데이터/보고서 (💡 전체 내용 편집 기능 추가)
+# 탭 5: 데이터/보고서 
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
     
-    # 💡 [요청 5번] 입력된 모든 업무 내용 일괄 수정 모드 추가
+    # 💡 [요청 5번] 전체 일괄 수정 모드 
     with st.expander("🛠️ 등록된 전체 업무 일괄 수정 (오타/내용 변경)"):
         st.info("표 안의 글씨를 더블클릭하여 바로 수정하고, 맨 아래 [일괄 수정 저장] 버튼을 누르세요.")
         t1, t2, t3 = st.tabs(["📝 일일 업무", "📁 프로젝트", "📋 하위 세부업무"])
-        
-        with t1:
-            e_d_df = st.data_editor(pd.DataFrame(all_daily), key="ed_d", use_container_width=True)
-        with t2:
-            e_p_df = st.data_editor(pd.DataFrame(proj_data), key="ed_p", use_container_width=True)
-        with t3:
-            e_s_df = st.data_editor(pd.DataFrame(sub_data), key="ed_s", use_container_width=True)
+        with t1: e_d_df = st.data_editor(pd.DataFrame(all_daily), key="ed_d", use_container_width=True)
+        with t2: e_p_df = st.data_editor(pd.DataFrame(proj_data), key="ed_p", use_container_width=True)
+        with t3: e_s_df = st.data_editor(pd.DataFrame(sub_data), key="ed_s", use_container_width=True)
             
-        if st.button("💾 전체 데이터 일괄 수정 저장", type="primary"):
+        if st.button("💾 전체 데이터 일괄 수정 저장", type="primary", disabled=is_locked):
             for r in e_d_df.to_dict('records'): supabase.table('daily').upsert(r).execute()
             for r in e_p_df.to_dict('records'): supabase.table('projects').upsert(r).execute()
             for r in e_s_df.to_dict('records'): supabase.table('sub_tasks').upsert(r).execute()
@@ -394,32 +414,37 @@ with tab_rep:
         r_d = st.date_input("보고 날짜", t_date, key="r_date_p")
         r_s = r_d.strftime("%Y-%m-%d")
         
-        # 💡 [요청 7번] 보고서 제외(True)인 항목은 보고서 배열에서 아예 뺍니다.
         rep_daily = [d for d in all_daily if str(d.get('날짜')) == r_s and (u_role == "마스터" or d.get('담당자') == u_name) and not bool(d.get('보고서제외', False))]
         rep_proj = [p for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name)]
+        rep_routines = [r for r in routine_data if r.get('담당자') == u_name]
         
-        h_d_html = "".join([f"<li style='margin-bottom:8px;'><b>[{t.get('분류','기타')}]</b> {'(완료)' if int(t.get('진행률',0))==100 else f'({t.get('진행률',0)}%)'} {str(t.get('업무명','')).replace(chr(10), '<br>')} <span style='color:#1976D2; font-size:0.9em;'>[{t.get('담당자','')}]</span></li>" for t in rep_daily])
+        # 💡 [요청 2번] 담당자 이름 노출 삭제
+        h_d_html = "".join([f"<li style='margin-bottom:8px;'><b>[{t.get('분류','기타')}]</b> {'(완료)' if int(t.get('진행률',0))==100 else f'({t.get('진행률',0)}%)'} {str(t.get('업무명','')).replace(chr(10), '<br>')}</li>" for t in rep_daily])
+        
+        # 💡 [요청 5번] 보고서에 루틴 고정 업무를 자동으로 별도 출력
+        h_r_html = "".join([f"<li style='margin-bottom:8px;'><b>[{r.get('분류','기타')}]</b> {str(r.get('업무명','')).replace(chr(10), '<br>')}</li>" for r in rep_routines])
         
         h_p_html = ""
         for p in rep_proj:
-            if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE": continue
+            # 💡 [요청 4번] 프로젝트 전체가 '보고서제외' 체크되어 있으면 패스
+            if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE" or bool(p.get('보고서제외', False)): continue
             pn = p.get('프로젝트명', '')
             st_txt = "(완료)" if str(p.get('완료여부')).upper() == "TRUE" else ""
             
-            # 하위 업무 중 '보고서 제외'가 아닌 것만 출력
             valid_subs = [s for s in sub_dict.get(pn, []) if not bool(s.get('보고서제외', False))]
-            if not valid_subs: continue # 표시할 하위업무가 없으면 프로젝트 타이틀도 패스
+            if not valid_subs: continue 
             
-            h_p_html += f"<div style='margin-top:15px;'><h4 style='margin-bottom:5px;'>■ [{p.get('분류','기타')}] {pn} <span style='color:#555; font-size:0.9em;'>({p.get('담당자','')})</span> <span style='color:#2e7d32;'>{st_txt}</span></h4><ul style='margin-top:0;'>"
+            h_p_html += f"<div style='margin-top:15px;'><h4 style='margin-bottom:5px;'>■ [{p.get('분류','기타')}] {pn} <span style='color:#2e7d32;'>{st_txt}</span></h4><ul style='margin-top:0;'>"
             for s in valid_subs:
                 prog = int(s.get('진행률',0))
                 icon = "✓" if prog==100 else ("▶" if prog>0 else "□")
-                h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%) <span style='color:#1976D2; font-size:0.9em;'>[{s.get('담당자','')}]</span></li>"
+                # 💡 [요청 2번] 담당자 이름 노출 삭제
+                h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%)</li>"
             h_p_html += "</ul></div>"
             
         title_txt = "전사 업무 보고서" if u_role == "마스터" else f"{u_name} 업무 보고서"
-        full_html = f"<html><body style='font-family:sans-serif;'><h2>[{r_s}] {title_txt}</h2><h3>■ 일일 업무</h3><ul style='line-height:1.5;'>{h_d_html}</ul><hr><h3>■ 프로젝트 현황</h3>{h_p_html}</body></html>"
-        st.components.v1.html(full_html, height=300, scrolling=True)
+        full_html = f"<html><body style='font-family:sans-serif;'><h2>[{r_s}] {title_txt}</h2><h3>■ 일일 업무</h3><ul style='line-height:1.5;'>{h_d_html}</ul><hr><h3>■ 고정 업무 (루틴)</h3><ul style='line-height:1.5;'>{h_r_html}</ul><hr><h3>■ 프로젝트 현황</h3>{h_p_html}</body></html>"
+        st.components.v1.html(full_html, height=400, scrolling=True)
         c_btn1, c_btn2 = st.columns([1, 3])
         with c_btn1: st.download_button("📥 HTML 다운로드", full_html.encode('utf-8'), f"Report_{r_s}.html")
 
@@ -430,7 +455,7 @@ with tab_rep:
         rep_proj = [p for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name)]
         xls_hr = ""
         for p in rep_proj:
-            if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE": continue
+            if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE" or bool(p.get('보고서제외', False)): continue
             pn = p.get('프로젝트명', '')
             cat = p.get('분류', '기타')
             ph = f"<b>[{pn}]</b><br>"
@@ -442,8 +467,8 @@ with tab_rep:
             for s in valid_subs:
                 prog = int(s.get('진행률',0))
                 total_p += prog
-                owner_s = f" [{s.get('담당자','')}]" if u_role == "마스터" and s.get('담당자') else ""
-                ph += f"- {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%){owner_s}<br>"
+                # 💡 [요청 2번] 담당자 이름 노출 삭제
+                ph += f"- {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%)<br>"
             avg_p = int(total_p / len(valid_subs)) if valid_subs else 0
             xls_hr += f"<tr><td><b>{cat}</b></td><td>{ph}</td><td style='text-align:center;'><b>{avg_p}%</b></td><td></td></tr>"
             
