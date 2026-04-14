@@ -4,7 +4,7 @@ from supabase import create_client, Client
 import datetime
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V16.1", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V16.2", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -32,7 +32,7 @@ def load_db_data():
         categories = supabase.table('categories').select("*").execute().data
         return daily, projects, sub_tasks, routines, settings, users, categories
     except Exception as e:
-        st.warning(f"일부 데이터를 불러오지 못했습니다: {e}")
+        st.warning(f"데이터 로드 실패: {e}")
         return [], [], [], [], [], [], []
 
 def apply_changes():
@@ -133,7 +133,13 @@ with tabs[0]:
                     apply_changes()
                     
         else: # 프로젝트 연동
-            my_projs = [p.get('프로젝트명') for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name) and str(p.get("보관함이동", "FALSE")).upper() != "TRUE"]
+            my_projs = []
+            for p in proj_data:
+                is_archived = p.get('보관함이동')
+                is_archived_bool = True if str(is_archived).upper() == "TRUE" or is_archived == True else False
+                if (u_role == "마스터" or p.get('담당자') == u_name) and not is_archived_bool:
+                    my_projs.append(p.get('프로젝트명'))
+            
             sel_p = st.selectbox("진행 중인 프로젝트", my_projs) if my_projs else None
             
             if sel_p:
@@ -206,7 +212,7 @@ with tabs[0]:
                         apply_changes()
 
 # ==========================================
-# 탭 2: 프로젝트 관리 
+# 탭 2: 프로젝트 관리 (💡 에러 해결 핵심 부분)
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
@@ -216,14 +222,30 @@ with tabs[1]:
         p_cat = pc2.selectbox("분류", cat_list, key="p_c", disabled=is_locked) 
         p_start = pc1.date_input("시작일", key="p_s", disabled=is_locked)
         p_kpi = pc2.selectbox("연관 KPI", dropdown_opts + ["기타"], key="p_k", disabled=is_locked)
+        
         if st.button("프로젝트 저장", disabled=is_locked):
             if p_name:
-                supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "완료여부": "FALSE", "보류여부": "FALSE", "보관함이동": "FALSE", "비고": "", "분류": p_cat, "KPI": p_kpi, "담당자": u_name}).execute()
+                # 💡 [핵심 해결] 10개를 억지로 채우지 않고, 입력받은 5개만 깔끔하게 전송합니다!
+                # 나머지는 수파베이스가 알아서 빈칸과 기본값(False)으로 채워줍니다.
+                supabase.table('projects').insert({
+                    "프로젝트명": p_name, 
+                    "시작일": str(p_start), 
+                    "분류": p_cat, 
+                    "KPI": p_kpi, 
+                    "담당자": u_name
+                }).execute()
+                st.success(f"[{p_name}] 프로젝트가 저장되었습니다!")
                 apply_changes()
 
     for i, p in enumerate(proj_data):
         r_id = p.get('id', f"temp_p_{i}")
-        if (u_role != "마스터" and p.get('담당자') != u_name) or str(p.get("보관함이동", "FALSE")).upper() == "TRUE": continue
+        
+        # 💡 [핵심 해결] 수파베이스의 bool(스위치) 값을 안전하게 파악하는 로직
+        is_archived = p.get("보관함이동")
+        is_archived_bool = True if str(is_archived).upper() == "TRUE" or is_archived == True else False
+        
+        if (u_role != "마스터" and p.get('담당자') != u_name) or is_archived_bool: 
+            continue
             
         pn = p.get("프로젝트명", "")
         owner = f" ({p.get('담당자','')})" if u_role == "마스터" else ""
@@ -252,7 +274,8 @@ with tabs[1]:
             ac1, ac2, ac3 = st.columns([2,1,1])
             if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked):
                 if isinstance(r_id, int) or str(r_id).isdigit():
-                    supabase.table('projects').update({"보관함이동": "TRUE"}).eq('id', r_id).execute()
+                    # 💡 [핵심 해결] 글자 "TRUE"가 아니라 진짜 스위치 True를 전송합니다.
+                    supabase.table('projects').update({"보관함이동": True}).eq('id', r_id).execute()
                     apply_changes()
             if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_id}", disabled=is_locked):
                 if isinstance(r_id, int) or str(r_id).isdigit():
@@ -372,9 +395,14 @@ with tab_rep:
         
         h_p_html = ""
         for p in rep_proj:
-            if str(p.get("보관함이동", "FALSE")).upper() == "TRUE": continue
+            is_archived = p.get('보관함이동')
+            is_archived_bool = True if str(is_archived).upper() == "TRUE" or is_archived == True else False
+            if is_archived_bool: continue
+            
             pn = p.get('프로젝트명', '')
-            st_txt = "(완료)" if str(p.get('완료여부','FALSE')).upper() == "TRUE" else ""
+            is_done = p.get('완료여부')
+            st_txt = "(완료)" if str(is_done).upper() == "TRUE" or is_done == True else ""
+            
             h_p_html += f"<div style='margin-top:15px;'><h4 style='margin-bottom:5px;'>■ [{p.get('분류','기타')}] {pn} <span style='color:#555; font-size:0.9em;'>({p.get('담당자','')})</span> <span style='color:#2e7d32;'>{st_txt}</span></h4><ul style='margin-top:0;'>"
             for s in sub_dict.get(pn, []):
                 prog = int(s.get('진행률',0))
@@ -396,7 +424,10 @@ with tab_rep:
         rep_proj = [p for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name)]
         xls_hr = ""
         for p in rep_proj:
-            if str(p.get("보관함이동", "FALSE")).upper() == "TRUE": continue
+            is_archived = p.get('보관함이동')
+            is_archived_bool = True if str(is_archived).upper() == "TRUE" or is_archived == True else False
+            if is_archived_bool: continue
+            
             pn = p.get('프로젝트명', '')
             cat = p.get('분류', '기타')
             ph = f"<b>[{pn}]</b><br>"
