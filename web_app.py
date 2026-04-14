@@ -20,15 +20,12 @@ def get_gspread_client():
 try:
     gc = get_gspread_client()
     sh = gc.open("업무관리_DB")
-    
-    # 탭 연결
     w_d = sh.worksheet("일일업무")
     w_p = sh.worksheet("프로젝트")
     w_s = sh.worksheet("세부업무")
     w_st = sh.worksheet("설정")
     w_u = sh.worksheet("계정관리")
     
-    # 루틴업무 시트 확인 및 생성
     sheet_list = [s.title for s in sh.worksheets()]
     if "루틴업무" not in sheet_list:
         w_r = sh.add_worksheet(title="루틴업무", rows="100", cols="10")
@@ -39,43 +36,43 @@ except Exception as e:
     st.error(f"구글 시트 연결 실패: {e}")
     st.stop()
 
-# 💡 [핵심 해결책] 6개의 시트를 단 1번의 요청으로 한 번에 가져오는 묶음 배송 함수
+# 💡 고유 행 번호(_r)를 부여하여 슬라이더 실종(오류) 완벽 해결
 def parse_batch_data(sheet_values):
     if not sheet_values or len(sheet_values) < 2: return []
     headers = [str(h).strip() for h in sheet_values[0]]
     records = []
-    for row in sheet_values[1:]:
-        # 빈 칸으로 인해 열 개수가 안 맞는 오류 방지
+    for idx, row in enumerate(sheet_values[1:]):
         padded_row = row + [''] * (len(headers) - len(row))
-        padded_row = padded_row[:len(headers)]
-        records.append(dict(zip(headers, padded_row)))
+        record = dict(zip(headers, padded_row[:len(headers)]))
+        record['_r'] = idx + 2 # 구글 시트의 실제 행 번호 (1번은 제목)
+        records.append(record)
     return records
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def load_db_data():
-    # 6번 요청하던 것을 1번의 Batch 요청으로 통합! (API 에러 90% 감소)
-    ranges = ['일일업무', '프로젝트', '세부업무', '루틴업무', '설정', '계정관리']
-    batch = sh.values_batch_get(ranges)
-    v_ranges = batch.get('valueRanges', [])
-    
-    return (
-        parse_batch_data(v_ranges[0].get('values', [])) if len(v_ranges) > 0 else [],
-        parse_batch_data(v_ranges[1].get('values', [])) if len(v_ranges) > 1 else [],
-        parse_batch_data(v_ranges[2].get('values', [])) if len(v_ranges) > 2 else [],
-        parse_batch_data(v_ranges[3].get('values', [])) if len(v_ranges) > 3 else [],
-        parse_batch_data(v_ranges[4].get('values', [])) if len(v_ranges) > 4 else [],
-        parse_batch_data(v_ranges[5].get('values', [])) if len(v_ranges) > 5 else []
-    )
+    try:
+        ranges = ['일일업무', '프로젝트', '세부업무', '루틴업무', '설정', '계정관리']
+        batch = sh.values_batch_get(ranges)
+        v_ranges = batch.get('valueRanges', [])
+        return (
+            parse_batch_data(v_ranges[0].get('values', [])) if len(v_ranges) > 0 else [],
+            parse_batch_data(v_ranges[1].get('values', [])) if len(v_ranges) > 1 else [],
+            parse_batch_data(v_ranges[2].get('values', [])) if len(v_ranges) > 2 else [],
+            parse_batch_data(v_ranges[3].get('values', [])) if len(v_ranges) > 3 else [],
+            parse_batch_data(v_ranges[4].get('values', [])) if len(v_ranges) > 4 else [],
+            parse_batch_data(v_ranges[5].get('values', [])) if len(v_ranges) > 5 else []
+        )
+    except:
+        st.error("⏳ 구글 시트 동시 접속 대기 중입니다. 1분 뒤 새로고침(F5) 해주세요.")
+        st.stop()
 
 def apply_changes():
-    load_db_data.clear() # 캐시 초기화
+    load_db_data.clear() 
     st.rerun()
 
-# --- [보안 및 로그인 로직] ---
-if 'logged_in' not in st.session_state:
-    st.session_state['logged_in'] = False
-if 'user_info' not in st.session_state:
-    st.session_state['user_info'] = {}
+# --- [보안 및 로그인] ---
+if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
+if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 def check_login(user_id, user_pw):
     users = w_u.get_all_records()
@@ -102,19 +99,22 @@ u_info = st.session_state['user_info']
 u_name = u_info.get('이름', '사용자')
 u_role = u_info.get('권한', '일반')
 
-# --- [데이터 로드 (한 번의 요청으로 가져옴)] ---
+# --- [사이드바] ---
+with st.sidebar:
+    st.subheader(f"👤 {u_name}님 ({u_role})")
+    if st.button("🔄 최신 데이터 불러오기", use_container_width=True, type="primary"):
+        apply_changes()
+    st.divider()
+    if st.button("🚪 로그아웃", use_container_width=True): 
+        st.session_state['logged_in'] = False
+        st.rerun()
+
+# --- [데이터 로드] ---
 all_daily, proj_data, sub_data, routine_data, kpi_config, user_data = load_db_data()
 
 for k in kpi_config:
     if '구분' not in k: k['구분'] = '공통'
 my_kpi_opts = [str(k.get('KPI명', '')) for k in kpi_config if str(k.get('구분', '공통')).strip() in ['공통', u_name]]
-
-# --- [사이드바 및 날짜 제어] ---
-with st.sidebar:
-    st.subheader(f"👤 {u_name}님 ({u_role})")
-    if st.button("🚪 로그아웃", use_container_width=True): 
-        st.session_state['logged_in'] = False
-        st.rerun()
 
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today(), key="main_date")
@@ -123,95 +123,126 @@ t_str = t_date.strftime("%Y-%m-%d")
 if f"lock_{t_str}" not in st.session_state: st.session_state[f"lock_{t_str}"] = False
 is_locked = st.session_state[f"lock_{t_str}"]
 
-# --- [탭 구성] ---
 if u_role == "마스터":
     filtered_daily = [d for d in all_daily if str(d.get('날짜')) == t_str]
-    tabs = st.tabs(["📝 전사 업무 관리", "📁 프로젝트 관리", "⚙️ 마스터 설정", "📈 통합 KPI 현황", "📊 데이터 및 보고서"])
-    tab_kpi = tabs[3]
-    tab_rep = tabs[4]
+    tabs = st.tabs(["📝 전사 일과 관리", "📁 프로젝트 관리", "⚙️ 마스터 설정", "📈 통합 KPI", "📊 데이터/보고서"])
+    tab_kpi = tabs[3]; tab_rep = tabs[4]
 else:
     filtered_daily = [d for d in all_daily if str(d.get('날짜')) == t_str and d.get('담당자') == u_name]
-    tabs = st.tabs(["📝 나의 일과", "📁 나의 프로젝트", "📈 나의 KPI 현황", "📊 나의 데이터 및 보고서"])
-    tab_kpi = tabs[2]
-    tab_rep = tabs[3]
+    tabs = st.tabs(["📝 나의 일과", "📁 나의 프로젝트", "📈 나의 KPI", "📊 데이터/보고서"])
+    tab_kpi = tabs[2]; tab_rep = tabs[3]
 
 sub_dict = {p.get("프로젝트명", ""): [] for p in proj_data}
-for idx, s in enumerate(sub_data):
+for s in sub_data:
     if u_role == "마스터" or s.get('담당자') == u_name:
         pn = s.get("프로젝트명", "")
-        if pn in sub_dict:
-            s['_r'] = idx + 2
-            sub_dict[pn].append(s)
+        if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 탭 1: 일과 관리 
+# 탭 1: 일과 관리 (💡 일회성/프로젝트/데일리 완벽 통합)
 # ==========================================
 with tabs[0]:
     st.header(f"📝 {t_str} 업무 리스트")
     dropdown_opts = [k.get('KPI명', '') for k in kpi_config] if u_role == "마스터" else my_kpi_opts
     
-    my_routines = [r for r in routine_data if r.get('담당자') == u_name]
-    with st.expander("🔄 매일 하는 데일리 업무 (루틴) 원클릭 등록", expanded=False):
-        if st.button("✨ 오늘 업무로 루틴 일괄 세팅하기", type="primary", disabled=is_locked or not my_routines):
-            new_rows = []
-            for r in my_routines:
-                new_rows.append([t_str, r.get('업무명',''), 0, "FALSE", r.get('분류','기타'), "", r.get('KPI',''), u_name])
-            if new_rows:
-                w_d.append_rows(new_rows)
-                st.success("데일리 업무 세팅 완료!")
-                import time; time.sleep(1)
-                apply_changes()
-        if not my_routines:
-            st.info("등록된 루틴이 없습니다. 아래에서 먼저 추가해 주세요.")
+    with st.expander("➕ 오늘의 업무 추가", expanded=not is_locked):
+        task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True)
+        
+        if task_type == "일반/데일리 업무":
+            my_routines = [r.get('업무명') for r in routine_data if r.get('담당자') == u_name]
+            # 데일리 업무를 선택하거나 직접 입력하도록 통합
+            sel_opt = st.selectbox("업무명", ["✏️ 직접 입력"] + my_routines)
+            if sel_opt == "✏️ 직접 입력":
+                n_task = st.text_input("새 업무명 (직접 입력)", disabled=is_locked)
+            else:
+                n_task = sel_opt
+                
+            c1, c2 = st.columns(2)
+            n_cat = c1.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"], disabled=is_locked)
+            n_kpi = c2.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
+            
+            if st.button("업무 추가", disabled=is_locked, type="primary"):
+                if n_task:
+                    w_d.append_row([t_str, n_task, 0, "FALSE", n_cat, "", n_kpi, u_name])
+                    apply_changes()
+                    
+        else: # 프로젝트 연동 업무 선택 시
+            my_projs = [p.get('프로젝트명') for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name) and str(p.get("보관함이동", "FALSE")).upper() != "TRUE"]
+            sel_p = st.selectbox("진행 중인 프로젝트", my_projs) if my_projs else None
+            
+            if sel_p:
+                my_subs = [s.get('세부업무명') for s in sub_data if s.get('프로젝트명') == sel_p]
+                sel_s = st.selectbox("프로젝트 하위 세부업무", my_subs) if my_subs else None
+                
+                if st.button("프로젝트 업무 당겨오기", disabled=is_locked, type="primary"):
+                    if sel_p and sel_s:
+                        p_kpi = next((p.get('KPI') for p in proj_data if p.get('프로젝트명') == sel_p), "기타")
+                        # 프로젝트명과 세부업무명을 "::"로 묶어서 저장 (나중에 슬라이더 동기화용)
+                        w_d.append_row([t_str, sel_s, 0, "TRUE", "프로젝트", f"{sel_p}::{sel_s}", p_kpi, u_name])
+                        apply_changes()
+            else:
+                st.info("현재 할당된 진행 중 프로젝트가 없습니다.")
 
-        st.divider()
+    st.divider()
+    
+    # 💡 고유 행 번호(_r)를 사용하여 슬라이더 충돌 방지
+    for row in filtered_daily:
+        r_idx = row['_r']
+        col1, col2, col3 = st.columns([4, 5, 1])
+        disp_name = str(row.get('업무명','')).replace('\n', '<br>')
+        badge = f" <small style='color:blue;'>[{row.get('담당자','')}]</small>" if u_role == "마스터" else ""
+        is_proj = str(row.get('프로젝트연동', 'FALSE')).upper() == "TRUE"
+        
+        if is_proj:
+            p_info = str(row.get('연결프로젝트', ''))
+            col1.markdown(f"**[📂프로젝트]** <span style='color:#555;'>{p_info.replace('::', ' > ')}</span>{badge}", unsafe_allow_html=True)
+        else:
+            col1.markdown(f"**[{row.get('분류', '기타')}]** {disp_name}{badge}", unsafe_allow_html=True)
+            
+        cur_p = int(row.get('진행률', 0) if str(row.get('진행률', 0)).isdigit() else 0)
+        new_p = col2.slider("진행", 0, 100, cur_p, 10, key=f"d_sld_{r_idx}", disabled=is_locked, label_visibility="collapsed")
+        
+        if not is_locked and new_p != cur_p:
+            try:
+                # 1. 일일 업무 시트 진행률 업데이트
+                w_d.update_cell(r_idx, 3, new_p) 
+                
+                # 💡 [핵심] 프로젝트 연동 업무라면, '세부업무' 시트의 진행률도 동시에 올립니다!
+                if is_proj:
+                    p_info = str(row.get('연결프로젝트', ''))
+                    if "::" in p_info:
+                        p_n, s_n = p_info.split("::", 1)
+                        for s in sub_data:
+                            if s.get('프로젝트명') == p_n and s.get('세부업무명') == s_n:
+                                w_s.update_cell(s['_r'], 3, new_p)
+                                break
+                st.toast(f"✅ 진행률 {new_p}% 저장 완료!")
+            except:
+                st.warning("⏳ 구글 시트 접속 지연. 잠시 후 다시 조절해주세요.")
+        
+        if col3.button("🗑️", key=f"d_del_{r_idx}", disabled=is_locked):
+            w_d.delete_rows(r_idx)
+            apply_changes()
+
+    # (데일리 업무 목록을 미리 관리해두는 셋팅 창)
+    with st.expander("⚙️ 나의 데일리 업무(루틴) 목록 관리", expanded=False):
         with st.form("add_routine_form"):
             rc1, rc2, rc3 = st.columns([2,1,1])
             r_task = rc1.text_input("새 데일리 업무명")
-            r_cat = rc2.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"], key="rc")
-            r_kpi = rc3.selectbox("연관 KPI", dropdown_opts + ["기타"], key="rk")
+            r_cat = rc2.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"])
+            r_kpi = rc3.selectbox("연관 KPI", dropdown_opts + ["기타"])
             if st.form_submit_button("목록에 추가하기"):
                 if r_task:
                     w_r.append_row([r_task, r_cat, r_kpi, u_name])
                     apply_changes()
-
-        for i, r in enumerate(routine_data):
+        for r in routine_data:
             if r.get('담당자') == u_name:
-                # 루틴업무의 실제 row index를 계산해야 함 (기존 로직 보완)
-                # 삭제는 gspread를 직접 다루므로, 약간의 시간차이가 발생할 수 있어 안전하게 구현
-                r_idx = routine_data.index(r) + 2 
+                r_idx = r['_r'] 
                 rc1, rc2 = st.columns([4, 1])
-                rc1.write(f"· **[{r.get('분류')}]** {r.get('업무명')} (KPI: {r.get('KPI')})")
-                if rc2.button("삭제", key=f"rdel_{r_idx}_{i}", disabled=is_locked):
+                rc1.write(f"· **[{r.get('분류')}]** {r.get('업무명')}")
+                if rc2.button("목록에서 삭제", key=f"rdel_{r_idx}"):
                     w_r.delete_rows(r_idx)
                     apply_changes()
-
-    st.divider()
-
-    with st.expander("➕ 새 일회성 업무 추가", expanded=not is_locked):
-        c1, c2, c3 = st.columns([2,1,1])
-        n_task = c1.text_area("업무명 (엔터로 줄바꿈 가능)", key="n_d_n", disabled=is_locked)
-        n_cat = c2.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"], key="n_d_c", disabled=is_locked)
-        n_kpi = c3.selectbox("연관 KPI", dropdown_opts + ["기타"], key="n_d_k", disabled=is_locked)
-        if st.button("업무 저장", disabled=is_locked):
-            if n_task:
-                w_d.append_row([t_str, n_task, 0, "FALSE", n_cat, "", n_kpi, u_name])
-                apply_changes()
-    
-    for i, row in enumerate(filtered_daily):
-        r_idx = all_daily.index(row) + 2
-        col1, col2, col3 = st.columns([4, 5, 1])
-        disp_name = str(row['업무명']).replace('\n', '<br>')
-        badge = f" <small style='color:blue;'>[{row.get('담당자','')}]</small>" if u_role == "마스터" else ""
-        col1.markdown(f"**[{row['분류']}]** {disp_name}{badge}", unsafe_allow_html=True)
-        new_p = col2.slider("진행", 0, 100, int(row.get('진행률', 0)), 10, key=f"d_sld_{r_idx}_{i}", disabled=is_locked, label_visibility="collapsed")
-        if not is_locked and new_p != int(row.get('진행률', 0)):
-            w_d.update_cell(r_idx, 2, new_p)
-            st.toast("완료")
-            apply_changes()
-        if col3.button("🗑️", key=f"d_del_{r_idx}_{i}", disabled=is_locked):
-            w_d.delete_rows(r_idx)
-            apply_changes()
 
 # ==========================================
 # 탭 2: 프로젝트 관리
@@ -229,36 +260,40 @@ with tabs[1]:
                 w_p.append_row([p_name, str(p_start), "", "FALSE", "FALSE", "FALSE", "", p_cat, p_kpi, u_name])
                 apply_changes()
 
-    for i, p in enumerate(proj_data):
-        r_idx = i + 2
+    for p in proj_data:
+        r_idx = p['_r']
         if (u_role != "마스터" and p.get('담당자') != u_name) or str(p.get("보관함이동", "FALSE")).upper() == "TRUE": continue
             
         pn = p.get("프로젝트명", "")
         owner = f" ({p.get('담당자','')})" if u_role == "마스터" else ""
         
         with st.expander(f"📂 {pn} [{p.get('분류')}]{owner}"):
-            with st.form(key=f"sub_form_{r_idx}_{i}"):
+            with st.form(key=f"sub_form_{r_idx}"):
                 sc1, sc2 = st.columns([3,1])
                 new_sub = sc1.text_input("세부 업무명")
-                if sc2.form_submit_button("추가", disabled=is_locked):
+                if sc2.form_submit_button("하위 업무 추가", disabled=is_locked):
                     if new_sub:
                         w_s.append_row([pn, new_sub, 0, "TRUE", u_name])
                         apply_changes()
             for s in sub_dict.get(pn, []):
                 sl1, sl2 = st.columns([6, 4])
-                sl1.markdown(f"· {str(s['세부업무명']).replace('\n','<br>')}", unsafe_allow_html=True)
-                sp = sl2.slider("진행", 0, 100, int(s.get('진행률',0)), 10, key=f"s_sld_{s['_r']}_{i}", disabled=is_locked, label_visibility="collapsed")
-                if not is_locked and sp != int(s.get('진행률',0)):
-                    w_s.update_cell(s['_r'], 3, sp)
-                    st.toast("완료")
-                    apply_changes()
+                sl1.markdown(f"· {str(s.get('세부업무명','')).replace('\n','<br>')}", unsafe_allow_html=True)
+                cur_sp = int(s.get('진행률',0) if str(s.get('진행률',0)).isdigit() else 0)
+                sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s['_r']}", disabled=is_locked, label_visibility="collapsed")
+                
+                if not is_locked and sp != cur_sp:
+                    try:
+                        w_s.update_cell(s['_r'], 3, sp)
+                        st.toast(f"✅ 진행률 {sp}% 저장 완료!")
+                    except:
+                        pass
             
             st.write("---")
             ac1, ac2, ac3 = st.columns([2,1,1])
-            if ac2.button("📦 보관함 이동", key=f"arc_{r_idx}_{i}", disabled=is_locked):
+            if ac2.button("📦 보관함 이동", key=f"arc_{r_idx}", disabled=is_locked):
                 w_p.update_cell(r_idx, 6, "TRUE")
                 apply_changes()
-            if ac3.button("🗑️ 삭제", key=f"pdel_{r_idx}_{i}", disabled=is_locked):
+            if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_idx}", disabled=is_locked):
                 w_p.delete_rows(r_idx)
                 apply_changes()
 
@@ -281,8 +316,7 @@ if u_role == "마스터":
         with c2:
             st.subheader("🎯 개인별 & 공통 KPI 관리")
             k_df = pd.DataFrame(kpi_config)
-            if '구분' not in k_df.columns:
-                k_df['구분'] = '공통'
+            if '구분' not in k_df.columns: k_df['구분'] = '공통'
             cols = k_df.columns.tolist()
             if '구분' in cols:
                 cols.insert(0, cols.pop(cols.index('구분')))
@@ -329,7 +363,6 @@ with tab_rep:
             apply_changes()
     st.divider()
     
-    # 보고서 기능 (생략 없이 유지)
     st.subheader("🖨️ 맞춤형 보고서 출력")
     r_type = st.radio("보고서 종류 선택", ["일일(HTML)", "기간별(Excel)"], horizontal=True)
     if r_type == "일일(HTML)":
