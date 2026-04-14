@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client, Client
 import datetime
+import io
 
 # 1. 웹페이지 설정
 st.set_page_config(page_title="NOWSYSTEM 관제탑 V18", layout="wide")
@@ -71,19 +72,19 @@ u_role = u_info.get('권한', '일반')
 # --- [데이터 할당 및 정렬] ---
 all_daily, proj_data, sub_data, routine_data, kpi_config, user_data, cat_data = load_db_data()
 
-# 💡 [요청 7번] 프로젝트 정렬: '정렬순서' 번호가 낮은 것부터, 그다음은 만들어진(id) 순서대로 고정
 proj_data = sorted(proj_data, key=lambda x: (int(x.get('정렬순서', 999)), int(x.get('id', 0))))
 sub_data = sorted(sub_data, key=lambda x: int(x.get('id', 0)))
 
 cat_list = sorted(list(set([str(c.get('분류명', '')) for c in cat_data if pd.notna(c.get('분류명')) and str(c.get('분류명')).strip() != ""])))
 if not cat_list: cat_list = ["경영관리", "재무업무", "기타"]
+
+# 💡 [요청 3번] 연관 KPI에 '공통'과 '본인(나)'에게 해당되는 KPI만 나오도록 필터링
 my_kpi_opts = [str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분', '공통')).strip() in ['공통', u_name] and str(k.get('KPI명')).strip() != ""]
 
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today(), key="main_date")
 t_str = t_date.strftime("%Y-%m-%d")
 
-# 💡 [요청 3번] 일과 마감 잠금 기능 설정
 if f"lock_{t_str}" not in st.session_state: st.session_state[f"lock_{t_str}"] = False
 is_locked = st.session_state[f"lock_{t_str}"]
 
@@ -93,7 +94,6 @@ with st.sidebar:
     if st.button("🔄 최신 데이터 불러오기", use_container_width=True, type="primary"): apply_changes()
     st.divider()
     
-    # 💡 [요청 3번] 마감 & 마감 취소 버튼
     if is_locked:
         st.success("🔒 현재 업무가 마감되었습니다. (수정 불가)")
         if st.button("🔓 일과 마감 취소", use_container_width=True):
@@ -128,7 +128,6 @@ for s in sub_data:
 # ==========================================
 with tabs[0]:
     st.header(f"📝 {t_str} 업무 리스트")
-    dropdown_opts = [k.get('KPI명', '') for k in kpi_config if k.get('KPI명')]
     
     with st.expander("➕ 오늘의 업무 추가", expanded=not is_locked):
         task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True, disabled=is_locked)
@@ -137,12 +136,12 @@ with tabs[0]:
             with st.form("add_daily_normal_form", clear_on_submit=True):
                 my_routines = [r.get('업무명') for r in routine_data if r.get('담당자') == u_name]
                 sel_opt = st.selectbox("업무명 (루틴에서 선택)", ["✏️ 직접 입력"] + my_routines, disabled=is_locked)
-                # 💡 [요청 6번] 다중 줄 입력창 적용 (최대 10줄)
                 n_task = st.text_area("새 업무명 (직접 입력 시: Alt+Enter 줄바꿈, Ctrl+Enter 저장)", height=100, disabled=is_locked) 
                     
                 c1, c2 = st.columns(2)
                 n_cat = c1.selectbox("분류", cat_list, disabled=is_locked) 
-                n_kpi = c2.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
+                # 💡 [요청 3번 적용] 연관 KPI에 my_kpi_opts만 출력
+                n_kpi = c2.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=is_locked)
                 
                 if st.form_submit_button("업무 추가", type="primary", disabled=is_locked):
                     final_task = n_task if sel_opt == "✏️ 직접 입력" else sel_opt
@@ -150,7 +149,6 @@ with tabs[0]:
                         supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": u_name, "보고서제외": False}).execute()
                         apply_changes()
         else: 
-            # 💡 [요청 1번] 폼(Form)을 제거하여, 프로젝트 선택 시 즉각 하위업무가 갱신되도록 해결!
             my_projs = [p.get('프로젝트명') for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name) and not (str(p.get('보관함이동')).upper() == "TRUE" or p.get('보관함이동') == True)]
             sel_p = st.selectbox("진행 중인 프로젝트", my_projs, disabled=is_locked) if my_projs else None
             my_subs = [s.get('세부업무명') for s in sub_data if s.get('프로젝트명') == sel_p] if sel_p else []
@@ -206,7 +204,8 @@ with tabs[0]:
         with st.form("add_routine_form", clear_on_submit=True):
             r_task = st.text_input("새 데일리 업무명 등록", disabled=is_locked)
             r_cat = st.selectbox("분류", cat_list, disabled=is_locked) 
-            r_kpi = st.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
+            # 💡 [요청 3번 적용] 연관 KPI에 my_kpi_opts만 출력
+            r_kpi = st.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=is_locked)
             if st.form_submit_button("루틴 목록에 추가", disabled=is_locked):
                 if r_task:
                     supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "KPI": r_kpi, "담당자": u_name}).execute()
@@ -233,7 +232,8 @@ with tabs[1]:
             p_name = pc1.text_input("프로젝트명", disabled=is_locked)
             p_cat = pc2.selectbox("분류", cat_list, disabled=is_locked) 
             p_start = pc1.date_input("시작일", disabled=is_locked)
-            p_kpi = pc2.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
+            # 💡 [요청 3번 적용] 연관 KPI에 my_kpi_opts만 출력
+            p_kpi = pc2.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=is_locked)
             if st.form_submit_button("프로젝트 저장", type="primary", disabled=is_locked):
                 if p_name:
                     supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "분류": p_cat, "KPI": p_kpi, "담당자": u_name, "정렬순서": 999, "보고서제외": False}).execute()
@@ -254,7 +254,6 @@ with tabs[1]:
         
         with st.expander(f"📂 {pn} [{p.get('분류')}] - 📊 전체 진행률: {avg_p}% {owner}"):
             
-            # 💡 [요청 4, 7번] 프로젝트 설정란 추가 (정렬순서 및 전체 보고서 제외)
             set_c1, set_c2 = st.columns(2)
             cur_ord = int(p.get('정렬순서', 999) if pd.notna(p.get('정렬순서')) else 999)
             new_ord = set_c1.number_input("🔢 프로젝트 표출 순서 (숫자가 낮을수록 위로)", value=cur_ord, key=f"pord_{r_id}", disabled=is_locked)
@@ -270,7 +269,6 @@ with tabs[1]:
 
             st.write("---")
 
-            # 💡 [요청 6번] 다중 줄 입력창 적용 (Ctrl+Enter 전송 지원)
             with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
                 sc1, sc2 = st.columns([4,1])
                 new_sub = sc1.text_area("세부 업무명 (Alt+Enter: 줄바꿈 / Ctrl+Enter: 즉시 추가)", height=100, disabled=is_locked)
@@ -386,12 +384,11 @@ with tab_kpi:
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 5: 데이터/보고서 
+# 탭 5: 데이터/보고서 (💡 엑셀 업로드 적용)
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
     
-    # 💡 [요청 5번] 전체 일괄 수정 모드 
     with st.expander("🛠️ 등록된 전체 업무 일괄 수정 (오타/내용 변경)"):
         st.info("표 안의 글씨를 더블클릭하여 바로 수정하고, 맨 아래 [일괄 수정 저장] 버튼을 누르세요.")
         t1, t2, t3 = st.tabs(["📝 일일 업무", "📁 프로젝트", "📋 하위 세부업무"])
@@ -408,6 +405,35 @@ with tab_rep:
 
     st.divider()
     
+    # 💡 [요청 4번] 엑셀(Excel) 양식 다운로드 및 데이터 업로드 기능
+    st.subheader("📥 과거 업무 일괄 업로드 (Excel)")
+    
+    temp_df = pd.DataFrame(columns=["날짜", "업무명", "진행률", "프로젝트연동", "분류", "연결프로젝트", "KPI", "담당자", "보고서제외"])
+    excel_buffer = io.BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+        temp_df.to_excel(writer, index=False)
+    
+    c_up1, c_up2 = st.columns([1, 2])
+    with c_up1:
+        st.write("1. 엑셀 양식을 다운로드하여 작성합니다.")
+        st.download_button("📄 업로드 양식(Excel) 받기", data=excel_buffer.getvalue(), file_name="template.xlsx", mime="application/vnd.openxmlformats-officedomedocument.spreadsheetml.sheet")
+    
+    with c_up2:
+        st.write("2. 작성된 엑셀 파일을 업로드합니다.")
+        up_file = st.file_uploader("Excel 파일 선택 (.xlsx)", type=["xlsx"])
+        if up_file and st.button("시트로 일괄 전송 (Excel)"):
+            try:
+                df_up = pd.read_excel(up_file).fillna("")
+                if u_role != "마스터": df_up['담당자'] = u_name 
+                new_rows = df_up.to_dict('records')
+                for row in new_rows: supabase.table('daily').insert(row).execute()
+                st.success("엑셀 데이터 업로드 완료!")
+                apply_changes()
+            except Exception as e:
+                st.error(f"업로드 중 에러가 발생했습니다: {e}")
+                
+    st.divider()
+    
     st.subheader("🖨️ 맞춤형 보고서 출력")
     r_type = st.radio("보고서 종류 선택", ["일일(HTML)", "기간별(Excel)"], horizontal=True)
     if r_type == "일일(HTML)":
@@ -418,15 +444,27 @@ with tab_rep:
         rep_proj = [p for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name)]
         rep_routines = [r for r in routine_data if r.get('담당자') == u_name]
         
-        # 💡 [요청 2번] 담당자 이름 노출 삭제
-        h_d_html = "".join([f"<li style='margin-bottom:8px;'><b>[{t.get('분류','기타')}]</b> {'(완료)' if int(t.get('진행률',0))==100 else f'({t.get('진행률',0)}%)'} {str(t.get('업무명','')).replace(chr(10), '<br>')}</li>" for t in rep_daily])
+        # 💡 [요청 2번 적용] 일일업무에서 프로젝트명 표출 및 안내 문구 추가
+        h_d_html = ""
+        for t in rep_daily:
+            is_proj = str(t.get('프로젝트연동', 'FALSE')).upper() == "TRUE"
+            prog = int(t.get('진행률', 0) if str(t.get('진행률',0)).isdigit() else 0)
+            prog_txt = "(완료)" if prog == 100 else f"({prog}%)"
+            task_name = str(t.get('업무명','')).replace(chr(10), '<br>')
+            
+            if is_proj:
+                p_info = str(t.get('연결프로젝트', ''))
+                p_name = p_info.split('::')[0] if '::' in p_info else p_info
+                task_str = f"{task_name} - <b>{p_name}</b> <span style='color:#777; font-size:0.85em;'>(아래 상세 프로젝트 참조)</span>"
+            else:
+                task_str = task_name
+                
+            h_d_html += f"<li style='margin-bottom:8px;'><b>[{t.get('분류','기타')}]</b> {prog_txt} {task_str}</li>"
         
-        # 💡 [요청 5번] 보고서에 루틴 고정 업무를 자동으로 별도 출력
         h_r_html = "".join([f"<li style='margin-bottom:8px;'><b>[{r.get('분류','기타')}]</b> {str(r.get('업무명','')).replace(chr(10), '<br>')}</li>" for r in rep_routines])
         
         h_p_html = ""
         for p in rep_proj:
-            # 💡 [요청 4번] 프로젝트 전체가 '보고서제외' 체크되어 있으면 패스
             if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE" or bool(p.get('보고서제외', False)): continue
             pn = p.get('프로젝트명', '')
             st_txt = "(완료)" if str(p.get('완료여부')).upper() == "TRUE" else ""
@@ -438,15 +476,21 @@ with tab_rep:
             for s in valid_subs:
                 prog = int(s.get('진행률',0))
                 icon = "✓" if prog==100 else ("▶" if prog>0 else "□")
-                # 💡 [요청 2번] 담당자 이름 노출 삭제
                 h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%)</li>"
             h_p_html += "</ul></div>"
             
         title_txt = "전사 업무 보고서" if u_role == "마스터" else f"{u_name} 업무 보고서"
         full_html = f"<html><body style='font-family:sans-serif;'><h2>[{r_s}] {title_txt}</h2><h3>■ 일일 업무</h3><ul style='line-height:1.5;'>{h_d_html}</ul><hr><h3>■ 고정 업무 (루틴)</h3><ul style='line-height:1.5;'>{h_r_html}</ul><hr><h3>■ 프로젝트 현황</h3>{h_p_html}</body></html>"
+        
         st.components.v1.html(full_html, height=400, scrolling=True)
-        c_btn1, c_btn2 = st.columns([1, 3])
-        with c_btn1: st.download_button("📥 HTML 다운로드", full_html.encode('utf-8'), f"Report_{r_s}.html")
+        
+        # 💡 [요청 1번 적용] 다운로드 및 복사 버튼 나란히 배치
+        c_btn1, c_btn2 = st.columns([1, 1])
+        with c_btn1: 
+            st.download_button("📥 HTML 다운로드", full_html.encode('utf-8'), f"Report_{r_s}.html", use_container_width=True)
+        with c_btn2: 
+            with st.expander("📋 HTML 코드 복사"): 
+                st.code(full_html, language="html")
 
     elif r_type == "기간별(Excel)":
         c_ds1, c_ds2 = st.columns(2)
@@ -467,7 +511,6 @@ with tab_rep:
             for s in valid_subs:
                 prog = int(s.get('진행률',0))
                 total_p += prog
-                # 💡 [요청 2번] 담당자 이름 노출 삭제
                 ph += f"- {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%)<br>"
             avg_p = int(total_p / len(valid_subs)) if valid_subs else 0
             xls_hr += f"<tr><td><b>{cat}</b></td><td>{ph}</td><td style='text-align:center;'><b>{avg_p}%</b></td><td></td></tr>"
