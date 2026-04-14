@@ -4,7 +4,7 @@ from supabase import create_client, Client
 import datetime
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V16.3", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V16.4", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -212,7 +212,7 @@ with tabs[0]:
                         apply_changes()
 
 # ==========================================
-# 탭 2: 프로젝트 관리 (💡 하위 업무 추가 최적화)
+# 탭 2: 프로젝트 관리 
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
@@ -225,6 +225,7 @@ with tabs[1]:
         
         if st.button("프로젝트 저장", disabled=is_locked):
             if p_name:
+                # 💡 최소 필수 항목 5개만 전송 (오류 방지)
                 supabase.table('projects').insert({
                     "프로젝트명": p_name, 
                     "시작일": str(p_start), 
@@ -253,7 +254,7 @@ with tabs[1]:
                 new_sub = sc1.text_input("세부 업무명")
                 if sc2.form_submit_button("하위 업무 추가", disabled=is_locked):
                     if new_sub:
-                        # 💡 [핵심 해결] 오류를 유발할 수 있는 '사용여부' 등을 빼고 최소한의 필수 데이터만 전송
+                        # 💡 [핵심 해결] '사용여부'를 삭제하고 4개 필수 항목만 전송합니다.
                         supabase.table('sub_tasks').insert({
                             "프로젝트명": pn, 
                             "세부업무명": new_sub, 
