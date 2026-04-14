@@ -4,9 +4,9 @@ from supabase import create_client, Client
 import datetime
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V13", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V15", layout="wide")
 
-# 2. 수파베이스(Supabase) DB 연결
+# 2. 수파베이스 DB 연결
 @st.cache_resource
 def init_connection() -> Client:
     url = st.secrets["SUPABASE_URL"]
@@ -16,14 +16,13 @@ def init_connection() -> Client:
 try:
     supabase = init_connection()
 except Exception as e:
-    st.error("데이터베이스 연결에 실패했습니다. Secrets 설정을 확인해주세요.")
+    st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 [핵심] 초고속 데이터 로드 (429 에러 완벽 해결)
+# 💡 초고속 데이터 로드
 @st.cache_data(ttl=30)
 def load_db_data():
     try:
-        # 6개 테이블의 데이터를 순식간에 가져옵니다.
         daily = supabase.table('daily').select("*").execute().data
         projects = supabase.table('projects').select("*").execute().data
         sub_tasks = supabase.table('sub_tasks').select("*").execute().data
@@ -31,20 +30,18 @@ def load_db_data():
         settings = supabase.table('settings').select("*").execute().data
         users = supabase.table('users').select("*").execute().data
         return daily, projects, sub_tasks, routines, settings, users
-    except Exception as e:
-        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+    except:
         return [], [], [], [], [], []
 
 def apply_changes():
     load_db_data.clear() 
     st.rerun()
 
-# --- [보안 및 로그인 로직] ---
+# --- [보안 및 로그인] ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 def check_login(user_id, user_pw):
-    # 로그인 시 매번 DB를 찌르지 않고, 캐시된 유저 데이터를 확인합니다.
     _, _, _, _, _, users = load_db_data()
     for u in users:
         if str(u.get('아이디')) == str(user_id) and str(u.get('비밀번호')) == str(user_pw):
@@ -69,6 +66,15 @@ u_info = st.session_state['user_info']
 u_name = u_info.get('이름', '사용자')
 u_role = u_info.get('권한', '일반')
 
+# --- [데이터 로드 및 분류/KPI 목록 추출] ---
+all_daily, proj_data, sub_data, routine_data, kpi_config, user_data = load_db_data()
+
+cat_list = sorted(list(set([str(k.get('분류명', '')) for k in kpi_config if pd.notna(k.get('분류명')) and str(k.get('분류명')).strip() != ""])))
+if not cat_list:
+    cat_list = ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"]
+
+my_kpi_opts = [str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분', '공통')).strip() in ['공통', u_name] and str(k.get('KPI명')).strip() != ""]
+
 # --- [사이드바] ---
 with st.sidebar:
     st.subheader(f"👤 {u_name}님 ({u_role})")
@@ -79,13 +85,6 @@ with st.sidebar:
         st.session_state['logged_in'] = False
         st.rerun()
 
-# --- [데이터 할당] ---
-all_daily, proj_data, sub_data, routine_data, kpi_config, user_data = load_db_data()
-
-for k in kpi_config:
-    if '구분' not in k: k['구분'] = '공통'
-my_kpi_opts = [str(k.get('KPI명', '')) for k in kpi_config if str(k.get('구분', '공통')).strip() in ['공통', u_name]]
-
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today(), key="main_date")
 t_str = t_date.strftime("%Y-%m-%d")
@@ -93,10 +92,11 @@ t_str = t_date.strftime("%Y-%m-%d")
 if f"lock_{t_str}" not in st.session_state: st.session_state[f"lock_{t_str}"] = False
 is_locked = st.session_state[f"lock_{t_str}"]
 
+# 💡 [V15 핵심] 마스터용 탭을 6개로 세분화 (설정1, 설정2 완벽 분리)
 if u_role == "마스터":
     filtered_daily = [d for d in all_daily if str(d.get('날짜')) == t_str]
-    tabs = st.tabs(["📝 전사 일과 관리", "📁 프로젝트 관리", "⚙️ 마스터 설정", "📈 통합 KPI", "📊 데이터/보고서"])
-    tab_kpi = tabs[3]; tab_rep = tabs[4]
+    tabs = st.tabs(["📝 전사 일과 관리", "📁 프로젝트 관리", "⚙️ 설정1 (KPI/계정)", "⚙️ 설정2 (업무분류)", "📈 통합 KPI", "📊 데이터/보고서"])
+    tab_set1 = tabs[2]; tab_set2 = tabs[3]; tab_kpi = tabs[4]; tab_rep = tabs[5]
 else:
     filtered_daily = [d for d in all_daily if str(d.get('날짜')) == t_str and d.get('담당자') == u_name]
     tabs = st.tabs(["📝 나의 일과", "📁 나의 프로젝트", "📈 나의 KPI", "📊 데이터/보고서"])
@@ -104,16 +104,15 @@ else:
 
 sub_dict = {p.get("프로젝트명", ""): [] for p in proj_data}
 for s in sub_data:
-    if u_role == "마스터" or s.get('담당자') == u_name:
-        pn = s.get("프로젝트명", "")
-        if pn in sub_dict: sub_dict[pn].append(s)
+    pn = s.get("프로젝트명", "")
+    if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
 # 탭 1: 일과 관리 
 # ==========================================
 with tabs[0]:
     st.header(f"📝 {t_str} 업무 리스트")
-    dropdown_opts = [k.get('KPI명', '') for k in kpi_config] if u_role == "마스터" else my_kpi_opts
+    dropdown_opts = [k.get('KPI명', '') for k in kpi_config if k.get('KPI명')]
     
     with st.expander("➕ 오늘의 업무 추가", expanded=not is_locked):
         task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True)
@@ -124,16 +123,12 @@ with tabs[0]:
             n_task = st.text_input("새 업무명 (직접 입력)", disabled=is_locked) if sel_opt == "✏️ 직접 입력" else sel_opt
                 
             c1, c2 = st.columns(2)
-            n_cat = c1.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"], disabled=is_locked)
+            n_cat = c1.selectbox("분류", cat_list, disabled=is_locked) 
             n_kpi = c2.selectbox("연관 KPI", dropdown_opts + ["기타"], disabled=is_locked)
             
             if st.button("업무 추가", disabled=is_locked, type="primary"):
                 if n_task:
-                    # 💡 Supabase 데이터 추가 (Insert)
-                    supabase.table('daily').insert({
-                        "날짜": t_str, "업무명": n_task, "진행률": 0, "프로젝트연동": "FALSE", 
-                        "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": u_name
-                    }).execute()
+                    supabase.table('daily').insert({"날짜": t_str, "업무명": n_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": u_name}).execute()
                     apply_changes()
                     
         else: # 프로젝트 연동
@@ -143,22 +138,16 @@ with tabs[0]:
             if sel_p:
                 my_subs = [s.get('세부업무명') for s in sub_data if s.get('프로젝트명') == sel_p]
                 sel_s = st.selectbox("프로젝트 하위 세부업무", my_subs) if my_subs else None
-                
                 if st.button("프로젝트 업무 당겨오기", disabled=is_locked, type="primary"):
                     if sel_p and sel_s:
                         p_kpi = next((p.get('KPI') for p in proj_data if p.get('프로젝트명') == sel_p), "기타")
-                        supabase.table('daily').insert({
-                            "날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", 
-                            "분류": "프로젝트", "연결프로젝트": f"{sel_p}::{sel_s}", "KPI": p_kpi, "담당자": u_name
-                        }).execute()
+                        supabase.table('daily').insert({"날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", "분류": "프로젝트", "연결프로젝트": f"{sel_p}::{sel_s}", "KPI": p_kpi, "담당자": u_name}).execute()
                         apply_changes()
-            else:
-                st.info("진행 중인 프로젝트가 없습니다.")
 
     st.divider()
     
-    for row in filtered_daily:
-        r_id = row['id'] # 💡 Supabase의 고유 번호(id) 사용
+    for i, row in enumerate(filtered_daily):
+        r_id = row.get('id', f"temp_d_{i}") 
         col1, col2, col3 = st.columns([4, 5, 1])
         disp_name = str(row.get('업무명','')).replace('\n', '<br>')
         badge = f" <small style='color:blue;'>[{row.get('담당자','')}]</small>" if u_role == "마스터" else ""
@@ -174,63 +163,63 @@ with tabs[0]:
         new_p = col2.slider("진행", 0, 100, cur_p, 10, key=f"d_sld_{r_id}", disabled=is_locked, label_visibility="collapsed")
         
         if not is_locked and new_p != cur_p:
-            # 💡 Supabase 데이터 수정 (Update)
-            supabase.table('daily').update({"진행률": new_p}).eq('id', r_id).execute()
-            if is_proj:
-                p_info = str(row.get('연결프로젝트', ''))
-                if "::" in p_info:
-                    p_n, s_n = p_info.split("::", 1)
-                    for s in sub_data:
-                        if s.get('프로젝트명') == p_n and s.get('세부업무명') == s_n:
-                            supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s['id']).execute()
-                            break
-            st.toast(f"✅ 진행률 {new_p}% 저장 완료!")
-            apply_changes()
+            if isinstance(r_id, int) or str(r_id).isdigit():
+                supabase.table('daily').update({"진행률": new_p}).eq('id', r_id).execute()
+                if is_proj:
+                    p_info = str(row.get('연결프로젝트', ''))
+                    if "::" in p_info:
+                        p_n, s_n = p_info.split("::", 1)
+                        for s in sub_data:
+                            if s.get('프로젝트명') == p_n and s.get('세부업무명') == s_n:
+                                s_id = s.get('id')
+                                if s_id: supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s_id).execute()
+                                break
+                st.toast(f"✅ 진행률 {new_p}% 저장 완료!")
+                apply_changes()
         
         if col3.button("🗑️", key=f"d_del_{r_id}", disabled=is_locked):
-            # 💡 Supabase 데이터 삭제 (Delete)
-            supabase.table('daily').delete().eq('id', r_id).execute()
-            apply_changes()
+            if isinstance(r_id, int) or str(r_id).isdigit():
+                supabase.table('daily').delete().eq('id', r_id).execute()
+                apply_changes()
 
     with st.expander("⚙️ 나의 데일리 업무(루틴) 목록 관리", expanded=False):
         with st.form("add_routine_form"):
             rc1, rc2, rc3 = st.columns([2,1,1])
             r_task = rc1.text_input("새 데일리 업무명")
-            r_cat = rc2.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"])
+            r_cat = rc2.selectbox("분류", cat_list) 
             r_kpi = rc3.selectbox("연관 KPI", dropdown_opts + ["기타"])
             if st.form_submit_button("목록에 추가하기"):
                 if r_task:
                     supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "KPI": r_kpi, "담당자": u_name}).execute()
                     apply_changes()
-        for r in routine_data:
+        for i, r in enumerate(routine_data):
             if r.get('담당자') == u_name:
+                r_id = r.get('id', f"temp_r_{i}")
                 rc1, rc2 = st.columns([4, 1])
                 rc1.write(f"· **[{r.get('분류')}]** {r.get('업무명')}")
-                if rc2.button("목록에서 삭제", key=f"rdel_{r['id']}"):
-                    supabase.table('routines').delete().eq('id', r['id']).execute()
-                    apply_changes()
+                if rc2.button("목록에서 삭제", key=f"rdel_{r_id}"):
+                    if isinstance(r_id, int) or str(r_id).isdigit():
+                        supabase.table('routines').delete().eq('id', r_id).execute()
+                        apply_changes()
 
 # ==========================================
-# 탭 2: 프로젝트 관리
+# 탭 2: 프로젝트 관리 
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
     with st.expander("✨ 신규 프로젝트 등록", expanded=False):
         pc1, pc2 = st.columns(2)
         p_name = pc1.text_input("프로젝트명", disabled=is_locked)
-        p_cat = pc2.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"], key="p_c", disabled=is_locked)
+        p_cat = pc2.selectbox("분류", cat_list, key="p_c", disabled=is_locked) 
         p_start = pc1.date_input("시작일", key="p_s", disabled=is_locked)
         p_kpi = pc2.selectbox("연관 KPI", dropdown_opts + ["기타"], key="p_k", disabled=is_locked)
         if st.button("프로젝트 저장", disabled=is_locked):
             if p_name:
-                supabase.table('projects').insert({
-                    "프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "완료여부": "FALSE", 
-                    "보류여부": "FALSE", "보관함이동": "FALSE", "비고": "", "분류": p_cat, "KPI": p_kpi, "담당자": u_name
-                }).execute()
+                supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "완료여부": "FALSE", "보류여부": "FALSE", "보관함이동": "FALSE", "비고": "", "분류": p_cat, "KPI": p_kpi, "담당자": u_name}).execute()
                 apply_changes()
 
-    for p in proj_data:
-        r_id = p['id']
+    for i, p in enumerate(proj_data):
+        r_id = p.get('id', f"temp_p_{i}")
         if (u_role != "마스터" and p.get('담당자') != u_name) or str(p.get("보관함이동", "FALSE")).upper() == "TRUE": continue
             
         pn = p.get("프로젝트명", "")
@@ -244,60 +233,97 @@ with tabs[1]:
                     if new_sub:
                         supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "사용여부": "TRUE", "담당자": u_name}).execute()
                         apply_changes()
-                        
-            for s in sub_dict.get(pn, []):
+            for j, s in enumerate(sub_dict.get(pn, [])):
+                s_id = s.get('id', f"temp_s_{j}")
                 sl1, sl2 = st.columns([6, 4])
                 sl1.markdown(f"· {str(s.get('세부업무명','')).replace('\n','<br>')}", unsafe_allow_html=True)
                 cur_sp = int(s.get('진행률',0) if str(s.get('진행률',0)).isdigit() else 0)
-                sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s['id']}", disabled=is_locked, label_visibility="collapsed")
-                
+                sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s_id}", disabled=is_locked, label_visibility="collapsed")
                 if not is_locked and sp != cur_sp:
-                    supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s['id']).execute()
-                    st.toast(f"✅ 진행률 {sp}% 저장 완료!")
-                    apply_changes()
+                    if isinstance(s_id, int) or str(s_id).isdigit():
+                        supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s_id).execute()
+                        st.toast(f"✅ 진행률 {sp}% 저장 완료!")
+                        apply_changes()
             
             st.write("---")
             ac1, ac2, ac3 = st.columns([2,1,1])
             if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked):
-                supabase.table('projects').update({"보관함이동": "TRUE"}).eq('id', r_id).execute()
-                apply_changes()
+                if isinstance(r_id, int) or str(r_id).isdigit():
+                    supabase.table('projects').update({"보관함이동": "TRUE"}).eq('id', r_id).execute()
+                    apply_changes()
             if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_id}", disabled=is_locked):
-                supabase.table('projects').delete().eq('id', r_id).execute()
-                apply_changes()
+                if isinstance(r_id, int) or str(r_id).isdigit():
+                    supabase.table('projects').delete().eq('id', r_id).execute()
+                    apply_changes()
 
 # ==========================================
-# 탭 3: 마스터 전용 설정
+# 탭 3: 마스터 전용 설정 1 (KPI & 계정)
 # ==========================================
 if u_role == "마스터":
-    with tabs[2]:
-        st.header("⚙️ 마스터 전용 설정")
+    with tab_set1:
+        st.header("⚙️ 설정 1 (사내 계정 및 KPI 관리)")
         c1, c2 = st.columns(2)
+        
+        # 계정 관리
         with c1:
             st.subheader("👥 사내 계정 목록")
             u_df = pd.DataFrame(user_data)
             e_u_df = st.data_editor(u_df, num_rows="dynamic", use_container_width=True)
             if st.button("계정 정보 저장"):
+                orig_u_ids = set(u_df['id'].dropna()) if 'id' in u_df.columns else set()
+                new_u_ids = set(e_u_df['id'].dropna()) if 'id' in e_u_df.columns else set()
+                for did in orig_u_ids - new_u_ids: supabase.table('users').delete().eq('id', did).execute()
                 for r in e_u_df.to_dict('records'):
-                    if pd.isna(r.get('id')): r.pop('id', None) # 새 항목일 경우 id 제거 (DB 자동생성)
+                    if pd.isna(r.get('id')): r.pop('id', None) 
                     supabase.table('users').upsert(r).execute()
-                st.success("저장 완료!")
+                st.success("계정 정보 저장 완료!")
                 apply_changes()
         
+        # KPI 관리 (DB 완벽 동기화 적용)
         with c2:
-            st.subheader("🎯 개인별 & 공통 KPI 관리")
-            k_df = pd.DataFrame(kpi_config)
+            st.subheader("🎯 개인별 & 공통 KPI 지표")
+            kpi_only = [{'id': k.get('id'), 'KPI명': k.get('KPI명'), '구분': k.get('구분', '공통')} for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('KPI명')).strip() != ""]
+            k_df = pd.DataFrame(kpi_only)
+            if 'KPI명' not in k_df.columns: k_df['KPI명'] = ""
             if '구분' not in k_df.columns: k_df['구분'] = '공통'
-            cols = k_df.columns.tolist()
-            if '구분' in cols:
-                cols.insert(0, cols.pop(cols.index('구분')))
-                k_df = k_df[cols]
+            
             e_k_df = st.data_editor(k_df, num_rows="dynamic", use_container_width=True)
             if st.button("KPI 지표 저장"):
+                orig_k_ids = set(k_df['id'].dropna()) if 'id' in k_df.columns else set()
+                new_k_ids = set(e_k_df['id'].dropna()) if 'id' in e_k_df.columns else set()
+                # 사용자가 휴지통으로 지운 줄 DB에서 완벽 삭제
+                for did in orig_k_ids - new_k_ids: supabase.table('settings').delete().eq('id', did).execute()
                 for r in e_k_df.to_dict('records'):
                     if pd.isna(r.get('id')): r.pop('id', None)
-                    supabase.table('settings').upsert(r).execute()
-                st.success("저장 완료!")
+                    if r.get('KPI명'): supabase.table('settings').upsert(r).execute()
+                st.success("KPI 지표 저장 완료!")
                 apply_changes()
+
+# ==========================================
+# 탭 4: 마스터 전용 설정 2 (업무 분류)
+# ==========================================
+if u_role == "마스터":
+    with tab_set2:
+        st.header("⚙️ 설정 2 (업무 분류(카테고리) 전용 관리)")
+        st.info("💡 나우시스템의 부서나 업무 체계가 개편될 때마다 자유롭게 카테고리를 추가/삭제해 보세요.")
+        
+        cat_only = [{'id': k.get('id'), '분류명': k.get('분류명')} for k in kpi_config if pd.notna(k.get('분류명')) and str(k.get('분류명')).strip() != ""]
+        c_df = pd.DataFrame(cat_only)
+        if '분류명' not in c_df.columns: c_df['분류명'] = ""
+        
+        e_c_df = st.data_editor(c_df, num_rows="dynamic", use_container_width=False, width=600)
+        
+        if st.button("업무 분류(카테고리) 목록 저장", type="primary"):
+            orig_c_ids = set(c_df['id'].dropna()) if 'id' in c_df.columns else set()
+            new_c_ids = set(e_c_df['id'].dropna()) if 'id' in e_c_df.columns else set()
+            
+            # 사용자가 휴지통으로 지운 카테고리 DB에서 완벽 삭제
+            for did in orig_c_ids - new_c_ids: supabase.table('settings').delete().eq('id', did).execute()
+            for r in e_c_df.to_dict('records'):
+                if pd.isna(r.get('id')): r.pop('id', None)
+                if r.get('분류명'): supabase.table('settings').upsert(r).execute()
+            st.success("새로운 업무 분류가 성공적으로 반영되었습니다!")
+            apply_changes()
 
 # ==========================================
 # KPI 현황 탭 & 보고서 탭
