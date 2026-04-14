@@ -4,7 +4,7 @@ from supabase import create_client, Client
 import datetime
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V15", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V16", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -19,7 +19,7 @@ except Exception as e:
     st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 초고속 데이터 로드
+# 💡 [V16 핵심] categories 테이블 추가 로드
 @st.cache_data(ttl=30)
 def load_db_data():
     try:
@@ -29,9 +29,10 @@ def load_db_data():
         routines = supabase.table('routines').select("*").execute().data
         settings = supabase.table('settings').select("*").execute().data
         users = supabase.table('users').select("*").execute().data
-        return daily, projects, sub_tasks, routines, settings, users
+        categories = supabase.table('categories').select("*").execute().data
+        return daily, projects, sub_tasks, routines, settings, users, categories
     except:
-        return [], [], [], [], [], []
+        return [], [], [], [], [], [], []
 
 def apply_changes():
     load_db_data.clear() 
@@ -42,7 +43,7 @@ if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 def check_login(user_id, user_pw):
-    _, _, _, _, _, users = load_db_data()
+    _, _, _, _, _, users, _ = load_db_data()
     for u in users:
         if str(u.get('아이디')) == str(user_id) and str(u.get('비밀번호')) == str(user_pw):
             st.session_state['logged_in'] = True
@@ -66,10 +67,11 @@ u_info = st.session_state['user_info']
 u_name = u_info.get('이름', '사용자')
 u_role = u_info.get('권한', '일반')
 
-# --- [데이터 로드 및 분류/KPI 목록 추출] ---
-all_daily, proj_data, sub_data, routine_data, kpi_config, user_data = load_db_data()
+# --- [데이터 할당] ---
+all_daily, proj_data, sub_data, routine_data, kpi_config, user_data, cat_data = load_db_data()
 
-cat_list = sorted(list(set([str(k.get('분류명', '')) for k in kpi_config if pd.notna(k.get('분류명')) and str(k.get('분류명')).strip() != ""])))
+# 💡 [V16 핵심] 이제 categories 테이블에서 순수하게 분류명만 가져옵니다.
+cat_list = sorted(list(set([str(c.get('분류명', '')) for c in cat_data if pd.notna(c.get('분류명')) and str(c.get('분류명')).strip() != ""])))
 if not cat_list:
     cat_list = ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"]
 
@@ -92,7 +94,6 @@ t_str = t_date.strftime("%Y-%m-%d")
 if f"lock_{t_str}" not in st.session_state: st.session_state[f"lock_{t_str}"] = False
 is_locked = st.session_state[f"lock_{t_str}"]
 
-# 💡 [V15 핵심] 마스터용 탭을 6개로 세분화 (설정1, 설정2 완벽 분리)
 if u_role == "마스터":
     filtered_daily = [d for d in all_daily if str(d.get('날짜')) == t_str]
     tabs = st.tabs(["📝 전사 일과 관리", "📁 프로젝트 관리", "⚙️ 설정1 (KPI/계정)", "⚙️ 설정2 (업무분류)", "📈 통합 KPI", "📊 데이터/보고서"])
@@ -257,14 +258,13 @@ with tabs[1]:
                     apply_changes()
 
 # ==========================================
-# 탭 3: 마스터 전용 설정 1 (KPI & 계정)
+# 탭 3: 마스터 전용 설정 1 (KPI & 계정) - 순수 settings 테이블 사용
 # ==========================================
 if u_role == "마스터":
     with tab_set1:
         st.header("⚙️ 설정 1 (사내 계정 및 KPI 관리)")
         c1, c2 = st.columns(2)
         
-        # 계정 관리
         with c1:
             st.subheader("👥 사내 계정 목록")
             u_df = pd.DataFrame(user_data)
@@ -279,19 +279,19 @@ if u_role == "마스터":
                 st.success("계정 정보 저장 완료!")
                 apply_changes()
         
-        # KPI 관리 (DB 완벽 동기화 적용)
         with c2:
             st.subheader("🎯 개인별 & 공통 KPI 지표")
-            kpi_only = [{'id': k.get('id'), 'KPI명': k.get('KPI명'), '구분': k.get('구분', '공통')} for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('KPI명')).strip() != ""]
-            k_df = pd.DataFrame(kpi_only)
+            k_df = pd.DataFrame(kpi_config)
             if 'KPI명' not in k_df.columns: k_df['KPI명'] = ""
             if '구분' not in k_df.columns: k_df['구분'] = '공통'
+            # 분류명(잔재) 숨김 처리
+            disp_cols = [col for col in k_df.columns if col not in ['분류명']]
+            k_df = k_df[disp_cols]
             
             e_k_df = st.data_editor(k_df, num_rows="dynamic", use_container_width=True)
             if st.button("KPI 지표 저장"):
                 orig_k_ids = set(k_df['id'].dropna()) if 'id' in k_df.columns else set()
                 new_k_ids = set(e_k_df['id'].dropna()) if 'id' in e_k_df.columns else set()
-                # 사용자가 휴지통으로 지운 줄 DB에서 완벽 삭제
                 for did in orig_k_ids - new_k_ids: supabase.table('settings').delete().eq('id', did).execute()
                 for r in e_k_df.to_dict('records'):
                     if pd.isna(r.get('id')): r.pop('id', None)
@@ -300,15 +300,14 @@ if u_role == "마스터":
                 apply_changes()
 
 # ==========================================
-# 탭 4: 마스터 전용 설정 2 (업무 분류)
+# 탭 4: 마스터 전용 설정 2 (업무 분류) - 💡 순수 categories 테이블 사용
 # ==========================================
 if u_role == "마스터":
     with tab_set2:
-        st.header("⚙️ 설정 2 (업무 분류(카테고리) 전용 관리)")
-        st.info("💡 나우시스템의 부서나 업무 체계가 개편될 때마다 자유롭게 카테고리를 추가/삭제해 보세요.")
+        st.header("⚙️ 설정 2 (업무 분류 전용 관리)")
+        st.info("💡 카테고리를 독립된 DB 테이블에서 안전하게 관리합니다. 이곳에서 변경한 내용은 즉시 전사 시스템에 반영됩니다.")
         
-        cat_only = [{'id': k.get('id'), '분류명': k.get('분류명')} for k in kpi_config if pd.notna(k.get('분류명')) and str(k.get('분류명')).strip() != ""]
-        c_df = pd.DataFrame(cat_only)
+        c_df = pd.DataFrame(cat_data)
         if '분류명' not in c_df.columns: c_df['분류명'] = ""
         
         e_c_df = st.data_editor(c_df, num_rows="dynamic", use_container_width=False, width=600)
@@ -317,16 +316,15 @@ if u_role == "마스터":
             orig_c_ids = set(c_df['id'].dropna()) if 'id' in c_df.columns else set()
             new_c_ids = set(e_c_df['id'].dropna()) if 'id' in e_c_df.columns else set()
             
-            # 사용자가 휴지통으로 지운 카테고리 DB에서 완벽 삭제
-            for did in orig_c_ids - new_c_ids: supabase.table('settings').delete().eq('id', did).execute()
+            for did in orig_c_ids - new_c_ids: supabase.table('categories').delete().eq('id', did).execute()
             for r in e_c_df.to_dict('records'):
                 if pd.isna(r.get('id')): r.pop('id', None)
-                if r.get('분류명'): supabase.table('settings').upsert(r).execute()
-            st.success("새로운 업무 분류가 성공적으로 반영되었습니다!")
+                if r.get('분류명'): supabase.table('categories').upsert(r).execute()
+            st.success("새로운 업무 분류가 안전하게 저장되었습니다!")
             apply_changes()
 
 # ==========================================
-# KPI 현황 탭 & 보고서 탭
+# KPI 현황 탭 & 보고서 탭 (유지)
 # ==========================================
 with tab_kpi:
     st.header("📈 전사 통합 KPI" if u_role == "마스터" else f"📈 {u_name}님 전용 KPI 현황")
