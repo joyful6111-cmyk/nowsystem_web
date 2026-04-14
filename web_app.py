@@ -5,7 +5,7 @@ import datetime
 import io
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V22", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V23", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -498,7 +498,7 @@ with tab_kpi:
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 5: 데이터/보고서 (💡 보고서 렌더링 V22 핵심 수정)
+# 탭 5: 데이터/보고서 (💡 보고서 렌더링 V23 핵심 수정)
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
@@ -567,7 +567,6 @@ with tab_rep:
         h_d_html = ""
         grouped_proj = {}
         
-        # 💡 [요청 적용] 일일 업무 렌더링 (분류 제거, 아이콘 적용, 프로젝트 참조 문구)
         for t in rep_daily:
             is_proj = str(t.get('프로젝트연동', 'FALSE')).upper() == "TRUE"
             prog = int(t.get('진행률', 0) if str(t.get('진행률',0)).isdigit() else 0)
@@ -594,26 +593,22 @@ with tab_rep:
                 p_info = str(t.get('연결프로젝트', ''))
                 p_name = p_info.split('::')[0] if '::' in p_info else p_info
                 
-                # 💡 [요청 1번] (아래 프로젝트명 참조) 문구 삽입
-                task_str = f"{task_name} - <b>{p_name}</b> <span style='color:#777; font-size:0.85em;'>(아래 {p_name} 참조)</span>"
-                
                 if p_name not in grouped_proj:
                     grouped_proj[p_name] = {'tasks': []}
-                grouped_proj[p_name]['tasks'].append(f"{icon} {task_str} {prog_txt}")
+                # 💡 [V23 핵심 수정] 하위 업무명 옆에 있던 텍스트 및 참조 문구 완벽하게 분리 제거!
+                grouped_proj[p_name]['tasks'].append(f"{icon} {task_name} {prog_txt}")
             else:
-                # 💡 [요청 2, 3번] 분류([경영관리] 등) 완전히 제거
                 h_d_html += f"<li style='margin-bottom:8px;'>{icon} {task_name} {prog_txt}</li>"
 
         for p_name, data in grouped_proj.items():
-            h_d_html += f"<li style='margin-bottom:8px;'><b>{p_name}</b><ul style='margin-top:4px; margin-bottom:0;'>"
+            # 💡 [V23 핵심 수정] 참조 문구를 굵은 글씨의 메인 프로젝트명 바로 옆으로 이동!
+            h_d_html += f"<li style='margin-bottom:8px;'><b>{p_name}</b> <span style='color:#777; font-size:0.85em;'>(아래 {p_name} 상세 참조)</span><ul style='margin-top:4px; margin-bottom:0;'>"
             for sub_t in data['tasks']:
                 h_d_html += f"<li style='margin-bottom:4px; list-style-type: none;'>{sub_t}</li>"
             h_d_html += "</ul></li>"
             
-        # 💡 [요청 4번] 루틴 업무는 항상 ✓ 아이콘과 (완료) 표기, 분류 제거
         h_r_html = "".join([f"<li style='margin-bottom:8px;'>✓ {str(r.get('업무명','')).replace(chr(10), '<br>')} (완료)</li>" for r in rep_routines])
         
-        # 💡 프로젝트 현황 렌더링
         h_p_html = ""
         for p in rep_proj:
             if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE" or bool(p.get('보고서제외', False)): continue
@@ -623,13 +618,11 @@ with tab_rep:
             valid_subs = [s for s in sub_dict.get(pn, []) if not bool(s.get('보고서제외', False))]
             if not valid_subs: continue 
             
-            # 💡 [요청 2번] 분류([경영관리] 등) 완전히 제거
             h_p_html += f"<div style='margin-top:15px;'><h4 style='margin-bottom:5px;'>■ {pn} <span style='color:#2e7d32;'>{st_txt}</span></h4><ul style='margin-top:0;'>"
             for s in valid_subs:
                 prog = int(s.get('진행률',0))
                 is_in_prog = bool(s.get('진행중', False))
                 
-                # 💡 [요청 3번] 아이콘 로직 정밀 적용
                 if prog == 100:
                     icon = "✓"
                     prog_txt = "(완료)"
