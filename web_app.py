@@ -7,13 +7,13 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V30", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V31", layout="wide")
 
-# 💡 쿠키 컨트롤러 초기화 (로그인 풀림 방지)
+# 💡 쿠키 컨트롤러 초기화 (에러 방어 로직 추가)
 cookie_controller = CookieController()
 if 'cookie_init' not in st.session_state:
     st.session_state['cookie_init'] = True
-    time.sleep(0.3) # 쿠키 로딩을 위한 안전 대기 시간
+    time.sleep(0.3) 
     st.rerun()
 
 # 2. 수파베이스 DB 연결
@@ -65,12 +65,16 @@ def check_login(user_id, user_pw):
             return True
     return False
 
+# 💡 [핵심 수정] 쿠키를 불러올 때 에러가 나면 무시하는 방어막(try-except) 설치
 if not st.session_state['logged_in']:
-    saved_id = cookie_controller.get('now_id')
-    saved_pw = cookie_controller.get('now_pw')
-    if saved_id and saved_pw:
-        if check_login(saved_id, saved_pw):
-            st.rerun()
+    try:
+        saved_id = cookie_controller.get('now_id')
+        saved_pw = cookie_controller.get('now_pw')
+        if saved_id and saved_pw:
+            if check_login(saved_id, saved_pw):
+                st.rerun()
+    except Exception:
+        pass # 쿠키가 준비되지 않았으면 부드럽게 패스
 
 if not st.session_state['logged_in']:
     st.markdown("<h1 style='text-align: center;'>🔒 NOWSYSTEM 관제탑</h1>", unsafe_allow_html=True)
@@ -81,8 +85,12 @@ if not st.session_state['logged_in']:
             in_pw = st.text_input("비밀번호", type="password")
             if st.form_submit_button("접속하기", use_container_width=True):
                 if check_login(in_id, in_pw):
-                    cookie_controller.set('now_id', in_id)
-                    cookie_controller.set('now_pw', in_pw)
+                    # 💡 쿠키 저장 시에도 에러 방어
+                    try:
+                        cookie_controller.set('now_id', in_id)
+                        cookie_controller.set('now_pw', in_pw)
+                    except Exception:
+                        pass
                     st.rerun()
                 else: st.error("정보가 일치하지 않습니다.")
     st.stop()
@@ -100,7 +108,6 @@ sub_data = sorted(sub_data, key=lambda x: int(x.get('id') or 0))
 cat_list = sorted(list(set([str(c.get('분류명') or '') for c in cat_data if pd.notna(c.get('분류명')) and str(c.get('분류명') or '').strip() != ""])))
 if not cat_list: cat_list = ["경영관리", "재무업무", "기타"]
 
-# 💡 날짜 초기화 보장
 t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today())
 t_str = t_date.strftime("%Y-%m-%d")
 
@@ -155,8 +162,12 @@ with st.sidebar:
 
     st.divider()
     if st.button("🚪 로그아웃", use_container_width=True): 
-        cookie_controller.remove('now_id')
-        cookie_controller.remove('now_pw')
+        # 💡 쿠키 삭제 시에도 에러 방어
+        try:
+            cookie_controller.remove('now_id')
+            cookie_controller.remove('now_pw')
+        except Exception:
+            pass
         st.session_state['logged_in'] = False
         st.rerun()
 
@@ -165,7 +176,6 @@ st.title("🚀 NOWSYSTEM 통합 업무 관리")
 kpi_target = target_user if target_user != "전체" else u_name
 my_kpi_opts = sorted(list(set([str(k.get('KPI명') or '') for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분') or '공통').strip() in ['공통', kpi_target] and str(k.get('KPI명') or '').strip() != ""])))
 
-# 💡 이월 로직 (NoneType 안전 보장)
 def is_task_visible(d, target_date_str):
     d_date = str(d.get('날짜') or '')
     if not d_date: return False
