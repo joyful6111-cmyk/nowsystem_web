@@ -5,7 +5,7 @@ import datetime
 import io
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V23", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V24", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -81,46 +81,54 @@ sub_data = sorted(sub_data, key=lambda x: int(x.get('id', 0)))
 cat_list = sorted(list(set([str(c.get('분류명', '')) for c in cat_data if pd.notna(c.get('분류명')) and str(c.get('분류명')).strip() != ""])))
 if not cat_list: cat_list = ["경영관리", "재무업무", "기타"]
 
-st.title("🚀 NOWSYSTEM 통합 업무 관리")
 t_date = st.date_input("📅 업무 기준일 선택", datetime.date.today(), key="main_date")
 t_str = t_date.strftime("%Y-%m-%d")
 
-if f"lock_{t_str}" not in st.session_state: st.session_state[f"lock_{t_str}"] = False
-is_locked = st.session_state[f"lock_{t_str}"]
-
-view_target = "전체"
-target_user = u_name
-
-# --- [사이드바] ---
+# --- [사이드바 & 타겟 유저 결정] ---
 with st.sidebar:
     st.subheader(f"👤 {u_name}님 ({u_role})")
     if st.button("🔄 최신 데이터 불러오기", use_container_width=True, type="primary"): apply_changes()
     st.divider()
     
-    if is_locked:
-        st.success("🔒 현재 업무가 마감되었습니다.")
-        if st.button("🔓 일과 마감 취소", use_container_width=True):
-            st.session_state[f"lock_{t_str}"] = False
-            st.rerun()
-    else:
-        if st.button("🔒 일과 마감하기", use_container_width=True, type="primary"):
-            st.session_state[f"lock_{t_str}"] = True
-            st.rerun()
-            
+    view_target = "전체"
+    target_user = u_name
+    
     if u_role == "마스터":
-        st.divider()
         st.markdown("**👀 직원 모니터링**")
         user_names = sorted(list(set([u.get('이름') for u in user_data if u.get('이름')])))
         view_target = st.selectbox("업무를 확인할 직원 선택", ["전체"] + user_names)
         if view_target != "전체":
             target_user = view_target
+            
+    st.divider()
+
+    # 💡 [요청 2번] 업무 마감 개별화 (target_user 기준)
+    lock_key = f"lock_{t_str}_{target_user}"
+    if lock_key not in st.session_state: st.session_state[lock_key] = False
+    is_locked = st.session_state[lock_key]
+
+    if is_locked:
+        st.success(f"🔒 {target_user} 업무 마감됨")
+        if st.button("🔓 일과 마감 취소", use_container_width=True):
+            st.session_state[lock_key] = False
+            st.rerun()
+    else:
+        if st.button("🔒 일과 마감하기", use_container_width=True, type="primary"):
+            st.session_state[lock_key] = True
+            st.rerun()
 
     st.divider()
     if st.button("🚪 로그아웃", use_container_width=True): 
         st.session_state['logged_in'] = False
         st.rerun()
 
-my_kpi_opts = [str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분', '공통')).strip() in ['공통', target_user] and str(k.get('KPI명')).strip() != ""]
+st.title("🚀 NOWSYSTEM 통합 업무 관리")
+
+# 💡 [요청 3번] KPI 항목 '전체'일 경우 전체 선택 가능하게 적용
+if view_target == "전체":
+    my_kpi_opts = sorted(list(set([str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('KPI명')).strip() != ""])))
+else:
+    my_kpi_opts = sorted(list(set([str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분', '공통')).strip() in ['공통', target_user] and str(k.get('KPI명')).strip() != ""])))
 
 if u_role == "마스터":
     if view_target == "전체":
@@ -146,7 +154,6 @@ for s in sub_data:
 with tabs[0]:
     header_title = f"📝 {t_str} {target_user} 업무 리스트" if view_target != "전체" else f"📝 {t_str} 전사 업무 리스트"
     st.header(header_title)
-    dropdown_opts = [k.get('KPI명', '') for k in kpi_config if k.get('KPI명')]
     
     with st.expander("➕ 오늘의 업무 추가", expanded=not is_locked):
         task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True, disabled=is_locked)
@@ -480,25 +487,35 @@ if u_role == "마스터":
 # KPI 현황 탭 
 # ==========================================
 with tab_kpi:
-    st.header(f"📈 {target_user} KPI 현황" if view_target != "전체" else "📈 전사 통합 KPI")
+    # 💡 [요청 3번] KPI 카운터 개별 분리
+    st.header(f"📈 {target_user} KPI 현황" if view_target != "전체" else "📈 전사 통합 KPI (개별 카운트)")
     stats = {}
     for d in all_daily:
         if view_target != "전체" and d.get('담당자') != target_user: continue
         k_name = str(d.get('KPI', '기타')).strip()
-        if u_role == "마스터" or k_name in my_kpi_opts:
-            p = int(d.get('진행률', 0) if str(d.get('진행률', 0)).isdigit() else 0)
-            if k_name not in stats: stats[k_name] = {"sum": 0, "count": 0}
-            stats[k_name]["sum"] += p
-            stats[k_name]["count"] += 1
+        owner = str(d.get('담당자', '알수없음'))
+        
+        # '전체' 보기일 경우 [이름] KPI명 형태로 분리하여 카운트
+        if view_target == "전체":
+            stat_key = f"[{owner}] {k_name}"
+        else:
+            stat_key = k_name
+            
+        if stat_key not in stats: stats[stat_key] = {"sum": 0, "count": 0}
+        p = int(d.get('진행률', 0) if str(d.get('진행률', 0)).isdigit() else 0)
+        stats[stat_key]["sum"] += p
+        stats[stat_key]["count"] += 1
+        
     if stats:
-        for k_name, data in stats.items():
+        for stat_key in sorted(stats.keys()):
+            data = stats[stat_key]
             avg = int(data["sum"] / data["count"]) if data["count"] > 0 else 0
-            st.write(f"**{k_name}** (총 {data['count']}건)")
+            st.write(f"**{stat_key}** (총 {data['count']}건)")
             st.progress(avg / 100, text=f"평균 달성률: {avg}%")
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 5: 데이터/보고서 (💡 보고서 렌더링 V23 핵심 수정)
+# 탭 5: 데이터/보고서
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
@@ -557,12 +574,10 @@ with tab_rep:
             rep_daily = [d for d in all_daily if str(d.get('날짜')) == r_s and not bool(d.get('보고서제외', False))]
             rep_proj = [p for p in proj_data]
             rep_routines = routine_data
-            title_txt = "전사 업무 보고서"
         else:
             rep_daily = [d for d in all_daily if str(d.get('날짜')) == r_s and d.get('담당자') == target_user and not bool(d.get('보고서제외', False))]
             rep_proj = [p for p in proj_data if p.get('담당자') == target_user]
             rep_routines = [r for r in routine_data if r.get('담당자') == target_user]
-            title_txt = f"{target_user} 업무 보고서"
             
         h_d_html = ""
         grouped_proj = {}
@@ -595,13 +610,11 @@ with tab_rep:
                 
                 if p_name not in grouped_proj:
                     grouped_proj[p_name] = {'tasks': []}
-                # 💡 [V23 핵심 수정] 하위 업무명 옆에 있던 텍스트 및 참조 문구 완벽하게 분리 제거!
                 grouped_proj[p_name]['tasks'].append(f"{icon} {task_name} {prog_txt}")
             else:
                 h_d_html += f"<li style='margin-bottom:8px;'>{icon} {task_name} {prog_txt}</li>"
 
         for p_name, data in grouped_proj.items():
-            # 💡 [V23 핵심 수정] 참조 문구를 굵은 글씨의 메인 프로젝트명 바로 옆으로 이동!
             h_d_html += f"<li style='margin-bottom:8px;'><b>{p_name}</b> <span style='color:#777; font-size:0.85em;'>(아래 {p_name} 상세 참조)</span><ul style='margin-top:4px; margin-bottom:0;'>"
             for sub_t in data['tasks']:
                 h_d_html += f"<li style='margin-bottom:4px; list-style-type: none;'>{sub_t}</li>"
@@ -641,13 +654,16 @@ with tab_rep:
                 h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} {prog_txt}</li>"
             h_p_html += "</ul></div>"
             
+        # 💡 [요청 1번] HTML 타이틀을 "업무 내용"으로 수정
+        title_txt = "업무 내용"
         full_html = f"<html><body style='font-family:sans-serif;'><h2>[{r_s}] {title_txt}</h2><h3>■ 일일 업무</h3><ul style='line-height:1.5;'>{h_d_html}</ul><hr><h3>■ 고정 업무 (루틴)</h3><ul style='line-height:1.5;'>{h_r_html}</ul><hr><h3>■ 프로젝트 현황</h3>{h_p_html}</body></html>"
         
         st.components.v1.html(full_html, height=400, scrolling=True)
         
         c_btn1, c_btn2 = st.columns([1, 1])
         with c_btn1: 
-            st.download_button("📥 HTML 다운로드", full_html.encode('utf-8'), f"Report_{r_s}.html", use_container_width=True)
+            # 💡 [요청 1번] 다운로드 파일명을 [년-월-일] 업무 내용.html 로 변경
+            st.download_button("📥 HTML 다운로드", full_html.encode('utf-8'), f"[{r_s}] 업무 내용.html", use_container_width=True)
         with c_btn2: 
             with st.expander("📋 HTML 코드 복사"): 
                 st.code(full_html, language="html")
@@ -659,10 +675,8 @@ with tab_rep:
         
         if u_role == "마스터" and view_target == "전체":
             rep_proj = [p for p in proj_data]
-            title_txt = "전사"
         else:
             rep_proj = [p for p in proj_data if p.get('담당자') == target_user]
-            title_txt = target_user
             
         xls_hr = ""
         for p in rep_proj:
@@ -682,5 +696,7 @@ with tab_rep:
             xls_hr += f"<tr><td>{ph}</td><td style='text-align:center;'><b>{avg_p}%</b></td><td></td></tr>"
             
         th = "<tr><th style='background:#e0f7fa; padding:8px;'>업무내역</th><th style='background:#e0f7fa; padding:8px;'>진행률</th><th style='background:#e0f7fa; padding:8px;'>예정사항</th></tr>"
-        xls_html = f"<html><meta charset='utf-8'><style>td {{border: 1px solid #ccc; padding: 8px; vertical-align: top; line-height:1.5;}}</style><body><h2>{title_txt} 업무 보고서 ({s_w} ~ {e_w})</h2><table style='border-collapse:collapse; width:100%; border: 1px solid #ccc;'>{th}{xls_hr}</table></body></html>"
-        st.download_button("💾 Excel 다운로드 (.xls)", xls_html.encode('utf-8-sig'), f"Report_{s_w}_{e_w}.xls")
+        # 💡 [요청 1번] 엑셀 타이틀도 "업무 내용"으로 수정
+        title_txt = "업무 내용"
+        xls_html = f"<html><meta charset='utf-8'><style>td {{border: 1px solid #ccc; padding: 8px; vertical-align: top; line-height:1.5;}}</style><body><h2>[{s_w} ~ {e_w}] {title_txt}</h2><table style='border-collapse:collapse; width:100%; border: 1px solid #ccc;'>{th}{xls_hr}</table></body></html>"
+        st.download_button("💾 Excel 다운로드 (.xls)", xls_html.encode('utf-8-sig'), f"[{s_w}_{e_w}] 업무 내용.xls")
