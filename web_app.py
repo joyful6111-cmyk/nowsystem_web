@@ -4,7 +4,7 @@ from supabase import create_client, Client
 import datetime
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V16.2", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V16.3", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -212,7 +212,7 @@ with tabs[0]:
                         apply_changes()
 
 # ==========================================
-# 탭 2: 프로젝트 관리 (💡 에러 해결 핵심 부분)
+# 탭 2: 프로젝트 관리 (💡 하위 업무 추가 최적화)
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
@@ -225,8 +225,6 @@ with tabs[1]:
         
         if st.button("프로젝트 저장", disabled=is_locked):
             if p_name:
-                # 💡 [핵심 해결] 10개를 억지로 채우지 않고, 입력받은 5개만 깔끔하게 전송합니다!
-                # 나머지는 수파베이스가 알아서 빈칸과 기본값(False)으로 채워줍니다.
                 supabase.table('projects').insert({
                     "프로젝트명": p_name, 
                     "시작일": str(p_start), 
@@ -240,7 +238,6 @@ with tabs[1]:
     for i, p in enumerate(proj_data):
         r_id = p.get('id', f"temp_p_{i}")
         
-        # 💡 [핵심 해결] 수파베이스의 bool(스위치) 값을 안전하게 파악하는 로직
         is_archived = p.get("보관함이동")
         is_archived_bool = True if str(is_archived).upper() == "TRUE" or is_archived == True else False
         
@@ -256,8 +253,15 @@ with tabs[1]:
                 new_sub = sc1.text_input("세부 업무명")
                 if sc2.form_submit_button("하위 업무 추가", disabled=is_locked):
                     if new_sub:
-                        supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "사용여부": "TRUE", "담당자": u_name}).execute()
+                        # 💡 [핵심 해결] 오류를 유발할 수 있는 '사용여부' 등을 빼고 최소한의 필수 데이터만 전송
+                        supabase.table('sub_tasks').insert({
+                            "프로젝트명": pn, 
+                            "세부업무명": new_sub, 
+                            "진행률": 0, 
+                            "담당자": u_name
+                        }).execute()
                         apply_changes()
+                        
             for j, s in enumerate(sub_dict.get(pn, [])):
                 s_id = s.get('id', f"temp_s_{j}")
                 sl1, sl2 = st.columns([6, 4])
@@ -274,7 +278,6 @@ with tabs[1]:
             ac1, ac2, ac3 = st.columns([2,1,1])
             if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked):
                 if isinstance(r_id, int) or str(r_id).isdigit():
-                    # 💡 [핵심 해결] 글자 "TRUE"가 아니라 진짜 스위치 True를 전송합니다.
                     supabase.table('projects').update({"보관함이동": True}).eq('id', r_id).execute()
                     apply_changes()
             if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_id}", disabled=is_locked):
