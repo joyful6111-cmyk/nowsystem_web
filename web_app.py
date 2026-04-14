@@ -5,7 +5,7 @@ import datetime
 import io
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V21", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V22", layout="wide")
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -44,7 +44,6 @@ def apply_changes():
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 if 'active_proj_id' not in st.session_state: st.session_state['active_proj_id'] = None
-# 💡 [요청 1,3번] 인라인 수정을 위한 메모리 추가
 if 'edit_d_id' not in st.session_state: st.session_state['edit_d_id'] = None
 if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
 
@@ -189,7 +188,6 @@ with tabs[0]:
     for i, row in enumerate(filtered_daily):
         r_id = row.get('id', f"temp_d_{i}") 
         
-        # 💡 [요청 1,3번] 인라인 편집 모드 (일일 업무)
         if st.session_state.get('edit_d_id') == r_id:
             with st.container(border=True):
                 st.write("🛠️ **업무 직접 수정**")
@@ -208,7 +206,7 @@ with tabs[0]:
                 if eb2.button("취소", key=f"ecan_{r_id}"):
                     st.session_state['edit_d_id'] = None
                     st.rerun()
-            continue # 편집 중이면 아래 렌더링 생략
+            continue 
             
         col1, col2, col3, col4, col5 = st.columns([4, 3, 1, 0.7, 0.7])
         disp_name = str(row.get('업무명','')).replace('\n', '<br>')
@@ -234,7 +232,7 @@ with tabs[0]:
                 apply_changes()
         
         is_ex = bool(row.get('보고서제외', False))
-        new_ex = col3.checkbox("🚫제외", value=is_ex, key=f"d_ex_{r_id}", disabled=is_locked)
+        new_ex = col3.checkbox("🚫제외", value=is_ex, key=f"d_ex_{r_id}", help="체크 시 보고서에 출력 안됨", disabled=is_locked)
         if not is_locked and new_ex != is_ex:
             supabase.table('daily').update({"보고서제외": new_ex}).eq('id', r_id).execute()
             apply_changes()
@@ -310,7 +308,6 @@ with tabs[1]:
         
         is_expanded = (st.session_state.get('active_proj_id') == r_id)
         
-        # 💡 프로젝트 창 타이틀에 KPI 표시
         with st.expander(f"📂 {pn} [{p.get('분류')}] (KPI: {p.get('KPI', '미지정')}) - 📊 전체 진행률: {avg_p}% {owner}", expanded=is_expanded):
             set_c1, set_c2, set_c3 = st.columns([1.5, 1.5, 2])
             cur_ord = int(p.get('정렬순서', 999) if pd.notna(p.get('정렬순서')) else 999)
@@ -327,7 +324,6 @@ with tabs[1]:
                 st.session_state['active_proj_id'] = r_id 
                 apply_changes()
 
-            # 💡 [요청 3번] 프로젝트명 간편 수정 폼
             with set_c3:
                 with st.form(key=f"ren_p_{r_id}"):
                     ren_p = st.text_input("🛠️ 프로젝트명 수정", value=pn, label_visibility="collapsed", disabled=is_locked)
@@ -358,7 +354,6 @@ with tabs[1]:
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id', f"temp_s_{j}")
                 
-                # 💡 [요청 1,3번] 인라인 편집 모드 (하위 업무)
                 if st.session_state.get('edit_s_id') == s_id:
                     with st.container(border=True):
                         st.write("🛠️ **하위 업무 수정**")
@@ -379,7 +374,6 @@ with tabs[1]:
                             st.rerun()
                     continue
                 
-                # 💡 [요청 2번] 진행중 체크박스(▶️) 추가 및 열 비율 조정
                 sl1, sl2, sl3, sl4, sl5, sl6, sl7 = st.columns([3.5, 2.5, 1, 1.2, 1, 0.6, 0.6])
                 sl1.markdown(f"· {str(s.get('세부업무명','')).replace('\n','<br>')}", unsafe_allow_html=True)
                 
@@ -397,7 +391,6 @@ with tabs[1]:
                         st.session_state['active_proj_id'] = r_id 
                         apply_changes()
 
-                # 💡 진행중 스위치 로직
                 s_prog = bool(s.get('진행중', False))
                 s_new_prog = sl4.checkbox("▶️진행중", value=s_prog, key=f"s_prg_{s_id}", disabled=is_locked)
                 if not is_locked and s_new_prog != s_prog:
@@ -505,7 +498,7 @@ with tab_kpi:
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 5: 데이터/보고서
+# 탭 5: 데이터/보고서 (💡 보고서 렌더링 V22 핵심 수정)
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
@@ -574,38 +567,53 @@ with tab_rep:
         h_d_html = ""
         grouped_proj = {}
         
+        # 💡 [요청 적용] 일일 업무 렌더링 (분류 제거, 아이콘 적용, 프로젝트 참조 문구)
         for t in rep_daily:
             is_proj = str(t.get('프로젝트연동', 'FALSE')).upper() == "TRUE"
             prog = int(t.get('진행률', 0) if str(t.get('진행률',0)).isdigit() else 0)
-            
-            # 💡 [요청 2번] 보고서에 진행중(▶) 마킹 적용
             is_in_prog = bool(t.get('진행중', False))
-            prog_txt = f"({prog}%)"
-            if is_in_prog: prog_txt += " <span style='color:#E65100; font-weight:bold;'>▶(현재진행중)</span>"
-            if prog == 100: prog_txt = "(완료)"
+            
+            if prog == 100:
+                icon = "✓"
+                prog_txt = "(완료)"
+            elif prog == 0:
+                icon = "□"
+                prog_txt = f"({prog}%)"
+                if is_in_prog:
+                    icon = "▶"
+                    prog_txt += " <span style='color:#E65100; font-weight:bold;'>(진행중)</span>"
+            else:
+                icon = "▶"
+                prog_txt = f"({prog}%)"
+                if is_in_prog:
+                    prog_txt += " <span style='color:#E65100; font-weight:bold;'>(진행중)</span>"
             
             task_name = str(t.get('업무명','')).replace(chr(10), '<br>')
             
             if is_proj:
                 p_info = str(t.get('연결프로젝트', ''))
                 p_name = p_info.split('::')[0] if '::' in p_info else p_info
-                cat = t.get('분류', '프로젝트')
+                
+                # 💡 [요청 1번] (아래 프로젝트명 참조) 문구 삽입
+                task_str = f"{task_name} - <b>{p_name}</b> <span style='color:#777; font-size:0.85em;'>(아래 {p_name} 참조)</span>"
                 
                 if p_name not in grouped_proj:
-                    grouped_proj[p_name] = {'cat': cat, 'tasks': []}
-                grouped_proj[p_name]['tasks'].append(f"{task_name} {prog_txt}")
+                    grouped_proj[p_name] = {'tasks': []}
+                grouped_proj[p_name]['tasks'].append(f"{icon} {task_str} {prog_txt}")
             else:
-                h_d_html += f"<li style='margin-bottom:8px;'><b>[{t.get('분류','기타')}]</b> {prog_txt} {task_name}</li>"
+                # 💡 [요청 2, 3번] 분류([경영관리] 등) 완전히 제거
+                h_d_html += f"<li style='margin-bottom:8px;'>{icon} {task_name} {prog_txt}</li>"
 
         for p_name, data in grouped_proj.items():
-            h_d_html += f"<li style='margin-bottom:8px;'><b>[{data['cat']}]</b> {p_name}<ul style='margin-top:4px; margin-bottom:0;'>"
+            h_d_html += f"<li style='margin-bottom:8px;'><b>{p_name}</b><ul style='margin-top:4px; margin-bottom:0;'>"
             for sub_t in data['tasks']:
-                icon = "✓" if "(완료)" in sub_t else "▶"
-                h_d_html += f"<li style='margin-bottom:4px; list-style-type: none;'>{icon} {sub_t}</li>"
+                h_d_html += f"<li style='margin-bottom:4px; list-style-type: none;'>{sub_t}</li>"
             h_d_html += "</ul></li>"
             
-        h_r_html = "".join([f"<li style='margin-bottom:8px;'><b>[{r.get('분류','기타')}]</b> {str(r.get('업무명','')).replace(chr(10), '<br>')}</li>" for r in rep_routines])
+        # 💡 [요청 4번] 루틴 업무는 항상 ✓ 아이콘과 (완료) 표기, 분류 제거
+        h_r_html = "".join([f"<li style='margin-bottom:8px;'>✓ {str(r.get('업무명','')).replace(chr(10), '<br>')} (완료)</li>" for r in rep_routines])
         
+        # 💡 프로젝트 현황 렌더링
         h_p_html = ""
         for p in rep_proj:
             if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE" or bool(p.get('보고서제외', False)): continue
@@ -615,17 +623,28 @@ with tab_rep:
             valid_subs = [s for s in sub_dict.get(pn, []) if not bool(s.get('보고서제외', False))]
             if not valid_subs: continue 
             
-            h_p_html += f"<div style='margin-top:15px;'><h4 style='margin-bottom:5px;'>■ [{p.get('분류','기타')}] {pn} <span style='color:#2e7d32;'>{st_txt}</span></h4><ul style='margin-top:0;'>"
+            # 💡 [요청 2번] 분류([경영관리] 등) 완전히 제거
+            h_p_html += f"<div style='margin-top:15px;'><h4 style='margin-bottom:5px;'>■ {pn} <span style='color:#2e7d32;'>{st_txt}</span></h4><ul style='margin-top:0;'>"
             for s in valid_subs:
                 prog = int(s.get('진행률',0))
-                
-                # 💡 [요청 2번] 보고서에 진행중(▶) 마킹 적용
                 is_in_prog = bool(s.get('진행중', False))
-                prog_txt = f"({prog}%)"
-                if is_in_prog: prog_txt += " <span style='color:#E65100; font-weight:bold;'>▶(현재진행중)</span>"
-                if prog == 100: prog_txt = "(완료)"
                 
-                icon = "✓" if prog==100 else "▶"
+                # 💡 [요청 3번] 아이콘 로직 정밀 적용
+                if prog == 100:
+                    icon = "✓"
+                    prog_txt = "(완료)"
+                elif prog == 0:
+                    icon = "□"
+                    prog_txt = f"({prog}%)"
+                    if is_in_prog:
+                        icon = "▶"
+                        prog_txt += " <span style='color:#E65100; font-weight:bold;'>(진행중)</span>"
+                else:
+                    icon = "▶"
+                    prog_txt = f"({prog}%)"
+                    if is_in_prog:
+                        prog_txt += " <span style='color:#E65100; font-weight:bold;'>(진행중)</span>"
+
                 h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} {prog_txt}</li>"
             h_p_html += "</ul></div>"
             
@@ -656,8 +675,7 @@ with tab_rep:
         for p in rep_proj:
             if bool(p.get('보관함이동', False)) or str(p.get('보관함이동')).upper() == "TRUE" or bool(p.get('보고서제외', False)): continue
             pn = p.get('프로젝트명', '')
-            cat = p.get('분류', '기타')
-            ph = f"<b>[{pn}]</b><br>"
+            ph = f"<b>{pn}</b><br>"
             
             valid_subs = [s for s in sub_dict.get(pn, []) if not bool(s.get('보고서제외', False))]
             if not valid_subs: continue
@@ -668,8 +686,8 @@ with tab_rep:
                 total_p += prog
                 ph += f"- {str(s.get('세부업무명','')).replace(chr(10), '<br>')} ({prog}%)<br>"
             avg_p = int(total_p / len(valid_subs)) if valid_subs else 0
-            xls_hr += f"<tr><td><b>{cat}</b></td><td>{ph}</td><td style='text-align:center;'><b>{avg_p}%</b></td><td></td></tr>"
+            xls_hr += f"<tr><td>{ph}</td><td style='text-align:center;'><b>{avg_p}%</b></td><td></td></tr>"
             
-        th = "<tr><th style='background:#e0f7fa; padding:8px;'>분류</th><th style='background:#e0f7fa; padding:8px;'>업무내역</th><th style='background:#e0f7fa; padding:8px;'>진행률</th><th style='background:#e0f7fa; padding:8px;'>예정사항</th></tr>"
+        th = "<tr><th style='background:#e0f7fa; padding:8px;'>업무내역</th><th style='background:#e0f7fa; padding:8px;'>진행률</th><th style='background:#e0f7fa; padding:8px;'>예정사항</th></tr>"
         xls_html = f"<html><meta charset='utf-8'><style>td {{border: 1px solid #ccc; padding: 8px; vertical-align: top; line-height:1.5;}}</style><body><h2>{title_txt} 업무 보고서 ({s_w} ~ {e_w})</h2><table style='border-collapse:collapse; width:100%; border: 1px solid #ccc;'>{th}{xls_hr}</table></body></html>"
         st.download_button("💾 Excel 다운로드 (.xls)", xls_html.encode('utf-8-sig'), f"Report_{s_w}_{e_w}.xls")
