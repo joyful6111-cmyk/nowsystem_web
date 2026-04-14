@@ -1,81 +1,51 @@
 import streamlit as st
-import gspread
-import datetime
 import pandas as pd
-import json
+from supabase import create_client, Client
+import datetime
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V13", layout="wide")
 
-# 2. 구글 시트 연결
+# 2. 수파베이스(Supabase) DB 연결
 @st.cache_resource
-def get_gspread_client():
-    try:
-        creds_json = st.secrets["google_credentials"]
-        credentials = json.loads(creds_json)
-        return gspread.service_account_from_dict(credentials)
-    except:
-        return gspread.service_account(filename="now_secret.json")
+def init_connection() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
 try:
-    gc = get_gspread_client()
-    sh = gc.open("업무관리_DB")
-    w_d = sh.worksheet("일일업무")
-    w_p = sh.worksheet("프로젝트")
-    w_s = sh.worksheet("세부업무")
-    w_st = sh.worksheet("설정")
-    w_u = sh.worksheet("계정관리")
-    
-    sheet_list = [s.title for s in sh.worksheets()]
-    if "루틴업무" not in sheet_list:
-        w_r = sh.add_worksheet(title="루틴업무", rows="100", cols="10")
-        w_r.append_row(["업무명", "분류", "KPI", "담당자"])
-    else:
-        w_r = sh.worksheet("루틴업무")
+    supabase = init_connection()
 except Exception as e:
-    st.error(f"구글 시트 연결 실패: {e}")
+    st.error("데이터베이스 연결에 실패했습니다. Secrets 설정을 확인해주세요.")
     st.stop()
 
-# 💡 고유 행 번호(_r)를 부여하여 슬라이더 실종(오류) 완벽 해결
-def parse_batch_data(sheet_values):
-    if not sheet_values or len(sheet_values) < 2: return []
-    headers = [str(h).strip() for h in sheet_values[0]]
-    records = []
-    for idx, row in enumerate(sheet_values[1:]):
-        padded_row = row + [''] * (len(headers) - len(row))
-        record = dict(zip(headers, padded_row[:len(headers)]))
-        record['_r'] = idx + 2 # 구글 시트의 실제 행 번호 (1번은 제목)
-        records.append(record)
-    return records
-
-@st.cache_data(ttl=60)
+# 💡 [핵심] 초고속 데이터 로드 (429 에러 완벽 해결)
+@st.cache_data(ttl=30)
 def load_db_data():
     try:
-        ranges = ['일일업무', '프로젝트', '세부업무', '루틴업무', '설정', '계정관리']
-        batch = sh.values_batch_get(ranges)
-        v_ranges = batch.get('valueRanges', [])
-        return (
-            parse_batch_data(v_ranges[0].get('values', [])) if len(v_ranges) > 0 else [],
-            parse_batch_data(v_ranges[1].get('values', [])) if len(v_ranges) > 1 else [],
-            parse_batch_data(v_ranges[2].get('values', [])) if len(v_ranges) > 2 else [],
-            parse_batch_data(v_ranges[3].get('values', [])) if len(v_ranges) > 3 else [],
-            parse_batch_data(v_ranges[4].get('values', [])) if len(v_ranges) > 4 else [],
-            parse_batch_data(v_ranges[5].get('values', [])) if len(v_ranges) > 5 else []
-        )
-    except:
-        st.error("⏳ 구글 시트 동시 접속 대기 중입니다. 1분 뒤 새로고침(F5) 해주세요.")
-        st.stop()
+        # 6개 테이블의 데이터를 순식간에 가져옵니다.
+        daily = supabase.table('daily').select("*").execute().data
+        projects = supabase.table('projects').select("*").execute().data
+        sub_tasks = supabase.table('sub_tasks').select("*").execute().data
+        routines = supabase.table('routines').select("*").execute().data
+        settings = supabase.table('settings').select("*").execute().data
+        users = supabase.table('users').select("*").execute().data
+        return daily, projects, sub_tasks, routines, settings, users
+    except Exception as e:
+        st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
+        return [], [], [], [], [], []
 
 def apply_changes():
     load_db_data.clear() 
     st.rerun()
 
-# --- [보안 및 로그인] ---
+# --- [보안 및 로그인 로직] ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 
 def check_login(user_id, user_pw):
-    users = w_u.get_all_records()
+    # 로그인 시 매번 DB를 찌르지 않고, 캐시된 유저 데이터를 확인합니다.
+    _, _, _, _, _, users = load_db_data()
     for u in users:
         if str(u.get('아이디')) == str(user_id) and str(u.get('비밀번호')) == str(user_pw):
             st.session_state['logged_in'] = True
@@ -109,7 +79,7 @@ with st.sidebar:
         st.session_state['logged_in'] = False
         st.rerun()
 
-# --- [데이터 로드] ---
+# --- [데이터 할당] ---
 all_daily, proj_data, sub_data, routine_data, kpi_config, user_data = load_db_data()
 
 for k in kpi_config:
@@ -139,7 +109,7 @@ for s in sub_data:
         if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 탭 1: 일과 관리 (💡 일회성/프로젝트/데일리 완벽 통합)
+# 탭 1: 일과 관리 
 # ==========================================
 with tabs[0]:
     st.header(f"📝 {t_str} 업무 리스트")
@@ -150,12 +120,8 @@ with tabs[0]:
         
         if task_type == "일반/데일리 업무":
             my_routines = [r.get('업무명') for r in routine_data if r.get('담당자') == u_name]
-            # 데일리 업무를 선택하거나 직접 입력하도록 통합
             sel_opt = st.selectbox("업무명", ["✏️ 직접 입력"] + my_routines)
-            if sel_opt == "✏️ 직접 입력":
-                n_task = st.text_input("새 업무명 (직접 입력)", disabled=is_locked)
-            else:
-                n_task = sel_opt
+            n_task = st.text_input("새 업무명 (직접 입력)", disabled=is_locked) if sel_opt == "✏️ 직접 입력" else sel_opt
                 
             c1, c2 = st.columns(2)
             n_cat = c1.selectbox("분류", ["경영관리", "재무업무", "입찰업무", "조달업무", "현장업무", "기타"], disabled=is_locked)
@@ -163,10 +129,14 @@ with tabs[0]:
             
             if st.button("업무 추가", disabled=is_locked, type="primary"):
                 if n_task:
-                    w_d.append_row([t_str, n_task, 0, "FALSE", n_cat, "", n_kpi, u_name])
+                    # 💡 Supabase 데이터 추가 (Insert)
+                    supabase.table('daily').insert({
+                        "날짜": t_str, "업무명": n_task, "진행률": 0, "프로젝트연동": "FALSE", 
+                        "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": u_name
+                    }).execute()
                     apply_changes()
                     
-        else: # 프로젝트 연동 업무 선택 시
+        else: # 프로젝트 연동
             my_projs = [p.get('프로젝트명') for p in proj_data if (u_role == "마스터" or p.get('담당자') == u_name) and str(p.get("보관함이동", "FALSE")).upper() != "TRUE"]
             sel_p = st.selectbox("진행 중인 프로젝트", my_projs) if my_projs else None
             
@@ -177,17 +147,18 @@ with tabs[0]:
                 if st.button("프로젝트 업무 당겨오기", disabled=is_locked, type="primary"):
                     if sel_p and sel_s:
                         p_kpi = next((p.get('KPI') for p in proj_data if p.get('프로젝트명') == sel_p), "기타")
-                        # 프로젝트명과 세부업무명을 "::"로 묶어서 저장 (나중에 슬라이더 동기화용)
-                        w_d.append_row([t_str, sel_s, 0, "TRUE", "프로젝트", f"{sel_p}::{sel_s}", p_kpi, u_name])
+                        supabase.table('daily').insert({
+                            "날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", 
+                            "분류": "프로젝트", "연결프로젝트": f"{sel_p}::{sel_s}", "KPI": p_kpi, "담당자": u_name
+                        }).execute()
                         apply_changes()
             else:
-                st.info("현재 할당된 진행 중 프로젝트가 없습니다.")
+                st.info("진행 중인 프로젝트가 없습니다.")
 
     st.divider()
     
-    # 💡 고유 행 번호(_r)를 사용하여 슬라이더 충돌 방지
     for row in filtered_daily:
-        r_idx = row['_r']
+        r_id = row['id'] # 💡 Supabase의 고유 번호(id) 사용
         col1, col2, col3 = st.columns([4, 5, 1])
         disp_name = str(row.get('업무명','')).replace('\n', '<br>')
         badge = f" <small style='color:blue;'>[{row.get('담당자','')}]</small>" if u_role == "마스터" else ""
@@ -200,31 +171,27 @@ with tabs[0]:
             col1.markdown(f"**[{row.get('분류', '기타')}]** {disp_name}{badge}", unsafe_allow_html=True)
             
         cur_p = int(row.get('진행률', 0) if str(row.get('진행률', 0)).isdigit() else 0)
-        new_p = col2.slider("진행", 0, 100, cur_p, 10, key=f"d_sld_{r_idx}", disabled=is_locked, label_visibility="collapsed")
+        new_p = col2.slider("진행", 0, 100, cur_p, 10, key=f"d_sld_{r_id}", disabled=is_locked, label_visibility="collapsed")
         
         if not is_locked and new_p != cur_p:
-            try:
-                # 1. 일일 업무 시트 진행률 업데이트
-                w_d.update_cell(r_idx, 3, new_p) 
-                
-                # 💡 [핵심] 프로젝트 연동 업무라면, '세부업무' 시트의 진행률도 동시에 올립니다!
-                if is_proj:
-                    p_info = str(row.get('연결프로젝트', ''))
-                    if "::" in p_info:
-                        p_n, s_n = p_info.split("::", 1)
-                        for s in sub_data:
-                            if s.get('프로젝트명') == p_n and s.get('세부업무명') == s_n:
-                                w_s.update_cell(s['_r'], 3, new_p)
-                                break
-                st.toast(f"✅ 진행률 {new_p}% 저장 완료!")
-            except:
-                st.warning("⏳ 구글 시트 접속 지연. 잠시 후 다시 조절해주세요.")
+            # 💡 Supabase 데이터 수정 (Update)
+            supabase.table('daily').update({"진행률": new_p}).eq('id', r_id).execute()
+            if is_proj:
+                p_info = str(row.get('연결프로젝트', ''))
+                if "::" in p_info:
+                    p_n, s_n = p_info.split("::", 1)
+                    for s in sub_data:
+                        if s.get('프로젝트명') == p_n and s.get('세부업무명') == s_n:
+                            supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s['id']).execute()
+                            break
+            st.toast(f"✅ 진행률 {new_p}% 저장 완료!")
+            apply_changes()
         
-        if col3.button("🗑️", key=f"d_del_{r_idx}", disabled=is_locked):
-            w_d.delete_rows(r_idx)
+        if col3.button("🗑️", key=f"d_del_{r_id}", disabled=is_locked):
+            # 💡 Supabase 데이터 삭제 (Delete)
+            supabase.table('daily').delete().eq('id', r_id).execute()
             apply_changes()
 
-    # (데일리 업무 목록을 미리 관리해두는 셋팅 창)
     with st.expander("⚙️ 나의 데일리 업무(루틴) 목록 관리", expanded=False):
         with st.form("add_routine_form"):
             rc1, rc2, rc3 = st.columns([2,1,1])
@@ -233,15 +200,14 @@ with tabs[0]:
             r_kpi = rc3.selectbox("연관 KPI", dropdown_opts + ["기타"])
             if st.form_submit_button("목록에 추가하기"):
                 if r_task:
-                    w_r.append_row([r_task, r_cat, r_kpi, u_name])
+                    supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "KPI": r_kpi, "담당자": u_name}).execute()
                     apply_changes()
         for r in routine_data:
             if r.get('담당자') == u_name:
-                r_idx = r['_r'] 
                 rc1, rc2 = st.columns([4, 1])
                 rc1.write(f"· **[{r.get('분류')}]** {r.get('업무명')}")
-                if rc2.button("목록에서 삭제", key=f"rdel_{r_idx}"):
-                    w_r.delete_rows(r_idx)
+                if rc2.button("목록에서 삭제", key=f"rdel_{r['id']}"):
+                    supabase.table('routines').delete().eq('id', r['id']).execute()
                     apply_changes()
 
 # ==========================================
@@ -257,44 +223,46 @@ with tabs[1]:
         p_kpi = pc2.selectbox("연관 KPI", dropdown_opts + ["기타"], key="p_k", disabled=is_locked)
         if st.button("프로젝트 저장", disabled=is_locked):
             if p_name:
-                w_p.append_row([p_name, str(p_start), "", "FALSE", "FALSE", "FALSE", "", p_cat, p_kpi, u_name])
+                supabase.table('projects').insert({
+                    "프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "완료여부": "FALSE", 
+                    "보류여부": "FALSE", "보관함이동": "FALSE", "비고": "", "분류": p_cat, "KPI": p_kpi, "담당자": u_name
+                }).execute()
                 apply_changes()
 
     for p in proj_data:
-        r_idx = p['_r']
+        r_id = p['id']
         if (u_role != "마스터" and p.get('담당자') != u_name) or str(p.get("보관함이동", "FALSE")).upper() == "TRUE": continue
             
         pn = p.get("프로젝트명", "")
         owner = f" ({p.get('담당자','')})" if u_role == "마스터" else ""
         
         with st.expander(f"📂 {pn} [{p.get('분류')}]{owner}"):
-            with st.form(key=f"sub_form_{r_idx}"):
+            with st.form(key=f"sub_form_{r_id}"):
                 sc1, sc2 = st.columns([3,1])
                 new_sub = sc1.text_input("세부 업무명")
                 if sc2.form_submit_button("하위 업무 추가", disabled=is_locked):
                     if new_sub:
-                        w_s.append_row([pn, new_sub, 0, "TRUE", u_name])
+                        supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "사용여부": "TRUE", "담당자": u_name}).execute()
                         apply_changes()
+                        
             for s in sub_dict.get(pn, []):
                 sl1, sl2 = st.columns([6, 4])
                 sl1.markdown(f"· {str(s.get('세부업무명','')).replace('\n','<br>')}", unsafe_allow_html=True)
                 cur_sp = int(s.get('진행률',0) if str(s.get('진행률',0)).isdigit() else 0)
-                sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s['_r']}", disabled=is_locked, label_visibility="collapsed")
+                sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s['id']}", disabled=is_locked, label_visibility="collapsed")
                 
                 if not is_locked and sp != cur_sp:
-                    try:
-                        w_s.update_cell(s['_r'], 3, sp)
-                        st.toast(f"✅ 진행률 {sp}% 저장 완료!")
-                    except:
-                        pass
+                    supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s['id']).execute()
+                    st.toast(f"✅ 진행률 {sp}% 저장 완료!")
+                    apply_changes()
             
             st.write("---")
             ac1, ac2, ac3 = st.columns([2,1,1])
-            if ac2.button("📦 보관함 이동", key=f"arc_{r_idx}", disabled=is_locked):
-                w_p.update_cell(r_idx, 6, "TRUE")
+            if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked):
+                supabase.table('projects').update({"보관함이동": "TRUE"}).eq('id', r_id).execute()
                 apply_changes()
-            if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_idx}", disabled=is_locked):
-                w_p.delete_rows(r_idx)
+            if ac3.button("🗑️ 프로젝트 삭제", key=f"pdel_{r_id}", disabled=is_locked):
+                supabase.table('projects').delete().eq('id', r_id).execute()
                 apply_changes()
 
 # ==========================================
@@ -309,7 +277,9 @@ if u_role == "마스터":
             u_df = pd.DataFrame(user_data)
             e_u_df = st.data_editor(u_df, num_rows="dynamic", use_container_width=True)
             if st.button("계정 정보 저장"):
-                w_u.clear(); w_u.update([e_u_df.columns.values.tolist()] + e_u_df.values.tolist())
+                for r in e_u_df.to_dict('records'):
+                    if pd.isna(r.get('id')): r.pop('id', None) # 새 항목일 경우 id 제거 (DB 자동생성)
+                    supabase.table('users').upsert(r).execute()
                 st.success("저장 완료!")
                 apply_changes()
         
@@ -323,7 +293,9 @@ if u_role == "마스터":
                 k_df = k_df[cols]
             e_k_df = st.data_editor(k_df, num_rows="dynamic", use_container_width=True)
             if st.button("KPI 지표 저장"):
-                w_st.clear(); w_st.update([e_k_df.columns.values.tolist()] + e_k_df.values.tolist())
+                for r in e_k_df.to_dict('records'):
+                    if pd.isna(r.get('id')): r.pop('id', None)
+                    supabase.table('settings').upsert(r).execute()
                 st.success("저장 완료!")
                 apply_changes()
 
@@ -357,8 +329,8 @@ with tab_rep:
         if up_file and st.button("시트로 일괄 전송"):
             df_up = pd.read_csv(up_file).fillna("")
             if u_role != "마스터": df_up['담당자'] = u_name 
-            new_rows = df_up.values.tolist()
-            w_d.append_rows(new_rows)
+            new_rows = df_up.to_dict('records')
+            for row in new_rows: supabase.table('daily').insert(row).execute()
             st.success("업로드 완료!")
             apply_changes()
     st.divider()
