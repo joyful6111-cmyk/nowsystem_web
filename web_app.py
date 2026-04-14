@@ -3,9 +3,13 @@ import pandas as pd
 from supabase import create_client, Client
 import datetime
 import io
+from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V24", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V25", layout="wide")
+
+# 💡 [요청 1번] 쿠키(기억력) 컨트롤러 실행
+cookie_controller = CookieController()
 
 # 2. 수파베이스 DB 연결
 @st.cache_resource
@@ -56,6 +60,14 @@ def check_login(user_id, user_pw):
             return True
     return False
 
+# 💡 [요청 1번] 쿠키에 저장된 아이디/비밀번호가 있으면 자동 로그인 수행
+if not st.session_state['logged_in']:
+    saved_id = cookie_controller.get('now_id')
+    saved_pw = cookie_controller.get('now_pw')
+    if saved_id and saved_pw:
+        if check_login(saved_id, saved_pw):
+            st.rerun()
+
 if not st.session_state['logged_in']:
     st.markdown("<h1 style='text-align: center;'>🔒 NOWSYSTEM 관제탑</h1>", unsafe_allow_html=True)
     _, l_col, _ = st.columns([1, 1, 1])
@@ -64,7 +76,11 @@ if not st.session_state['logged_in']:
             in_id = st.text_input("아이디")
             in_pw = st.text_input("비밀번호", type="password")
             if st.form_submit_button("접속하기", use_container_width=True):
-                if check_login(in_id, in_pw): st.rerun()
+                if check_login(in_id, in_pw):
+                    # 💡 [요청 1번] 로그인 성공 시 쿠키에 정보 저장
+                    cookie_controller.set('now_id', in_id)
+                    cookie_controller.set('now_pw', in_pw)
+                    st.rerun()
                 else: st.error("정보가 일치하지 않습니다.")
     st.stop()
 
@@ -102,7 +118,6 @@ with st.sidebar:
             
     st.divider()
 
-    # 💡 [요청 2번] 업무 마감 개별화 (target_user 기준)
     lock_key = f"lock_{t_str}_{target_user}"
     if lock_key not in st.session_state: st.session_state[lock_key] = False
     is_locked = st.session_state[lock_key]
@@ -119,12 +134,14 @@ with st.sidebar:
 
     st.divider()
     if st.button("🚪 로그아웃", use_container_width=True): 
+        # 💡 [요청 1번] 로그아웃 시 쿠키 정보 싹 지우기
+        cookie_controller.remove('now_id')
+        cookie_controller.remove('now_pw')
         st.session_state['logged_in'] = False
         st.rerun()
 
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 
-# 💡 [요청 3번] KPI 항목 '전체'일 경우 전체 선택 가능하게 적용
 if view_target == "전체":
     my_kpi_opts = sorted(list(set([str(k.get('KPI명', '')) for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('KPI명')).strip() != ""])))
 else:
@@ -154,6 +171,7 @@ for s in sub_data:
 with tabs[0]:
     header_title = f"📝 {t_str} {target_user} 업무 리스트" if view_target != "전체" else f"📝 {t_str} 전사 업무 리스트"
     st.header(header_title)
+    dropdown_opts = [k.get('KPI명', '') for k in kpi_config if k.get('KPI명')]
     
     with st.expander("➕ 오늘의 업무 추가", expanded=not is_locked):
         task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True, disabled=is_locked)
@@ -174,10 +192,11 @@ with tabs[0]:
                         supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "연결프로젝트": "", "KPI": n_kpi, "담당자": target_user, "보고서제외": False, "진행중": False}).execute()
                         apply_changes()
         else: 
+            # 💡 [요청 2번] 프로젝트 당겨올 때도 '시작일'이 지난(혹은 같은) 프로젝트만 드롭다운에 표시
             if u_role == "마스터" and view_target == "전체":
-                my_projs = [p.get('프로젝트명') for p in proj_data if not (str(p.get('보관함이동')).upper() == "TRUE" or p.get('보관함이동') == True)]
+                my_projs = [p.get('프로젝트명') for p in proj_data if not (str(p.get('보관함이동')).upper() == "TRUE" or p.get('보관함이동') == True) and str(p.get('시작일', '')) <= t_str]
             else:
-                my_projs = [p.get('프로젝트명') for p in proj_data if p.get('담당자') == target_user and not (str(p.get('보관함이동')).upper() == "TRUE" or p.get('보관함이동') == True)]
+                my_projs = [p.get('프로젝트명') for p in proj_data if p.get('담당자') == target_user and not (str(p.get('보관함이동')).upper() == "TRUE" or p.get('보관함이동') == True) and str(p.get('시작일', '')) <= t_str]
             
             sel_p = st.selectbox("진행 중인 프로젝트", my_projs, disabled=is_locked) if my_projs else None
             my_subs = [s.get('세부업무명') for s in sub_data if s.get('프로젝트명') == sel_p] if sel_p else []
@@ -287,11 +306,16 @@ with tabs[1]:
             pc1, pc2 = st.columns(2)
             p_name = pc1.text_input("프로젝트명", disabled=is_locked)
             p_cat = pc2.selectbox("분류", cat_list, disabled=is_locked) 
+            
+            # 💡 [요청 2번] 완료일 입력 추가
             p_start = pc1.date_input("시작일", disabled=is_locked)
-            p_kpi = pc2.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=is_locked)
+            p_end = pc2.date_input("완료일", disabled=is_locked)
+            
+            p_kpi = pc1.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=is_locked)
+            
             if st.form_submit_button("프로젝트 저장", type="primary", disabled=is_locked):
                 if p_name:
-                    supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "분류": p_cat, "KPI": p_kpi, "담당자": target_user, "정렬순서": 999, "보고서제외": False}).execute()
+                    supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "완료일": str(p_end), "분류": p_cat, "KPI": p_kpi, "담당자": target_user, "정렬순서": 999, "보고서제외": False}).execute()
                     st.success(f"[{p_name}] 저장 완료!")
                     apply_changes()
 
@@ -305,6 +329,10 @@ with tabs[1]:
             if p.get('담당자') != target_user: continue
             
         if is_archived_bool: continue
+        
+        # 💡 [요청 2번] 시작일이 현재 날짜(t_str)보다 미래인 프로젝트는 화면에 숨김 처리
+        p_start_str = str(p.get("시작일", ""))
+        if p_start_str and p_start_str > t_str: continue
             
         pn = p.get("프로젝트명", "")
         owner = f" ({p.get('담당자','')})" if u_role == "마스터" and view_target == "전체" else ""
@@ -425,7 +453,14 @@ with tabs[1]:
             
             st.write("---")
             ac1, ac2, ac3 = st.columns([2,1,1])
-            if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked):
+            
+            # 💡 [요청 2번] 완료일이 지난 후에만 '보관함 이동' 가능하게 조건 추가
+            p_end_str = str(p.get("완료일", ""))
+            can_archive = True
+            if p_end_str and t_str < p_end_str:
+                can_archive = False
+                
+            if ac2.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=is_locked or not can_archive, help="설정된 완료일 이후에만 이동 가능합니다." if not can_archive else ""):
                 if isinstance(r_id, int) or str(r_id).isdigit():
                     supabase.table('projects').update({"보관함이동": True}).eq('id', r_id).execute()
                     st.session_state['active_proj_id'] = None 
@@ -487,7 +522,6 @@ if u_role == "마스터":
 # KPI 현황 탭 
 # ==========================================
 with tab_kpi:
-    # 💡 [요청 3번] KPI 카운터 개별 분리
     st.header(f"📈 {target_user} KPI 현황" if view_target != "전체" else "📈 전사 통합 KPI (개별 카운트)")
     stats = {}
     for d in all_daily:
@@ -495,7 +529,6 @@ with tab_kpi:
         k_name = str(d.get('KPI', '기타')).strip()
         owner = str(d.get('담당자', '알수없음'))
         
-        # '전체' 보기일 경우 [이름] KPI명 형태로 분리하여 카운트
         if view_target == "전체":
             stat_key = f"[{owner}] {k_name}"
         else:
@@ -654,7 +687,6 @@ with tab_rep:
                 h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명','')).replace(chr(10), '<br>')} {prog_txt}</li>"
             h_p_html += "</ul></div>"
             
-        # 💡 [요청 1번] HTML 타이틀을 "업무 내용"으로 수정
         title_txt = "업무 내용"
         full_html = f"<html><body style='font-family:sans-serif;'><h2>[{r_s}] {title_txt}</h2><h3>■ 일일 업무</h3><ul style='line-height:1.5;'>{h_d_html}</ul><hr><h3>■ 고정 업무 (루틴)</h3><ul style='line-height:1.5;'>{h_r_html}</ul><hr><h3>■ 프로젝트 현황</h3>{h_p_html}</body></html>"
         
@@ -662,7 +694,6 @@ with tab_rep:
         
         c_btn1, c_btn2 = st.columns([1, 1])
         with c_btn1: 
-            # 💡 [요청 1번] 다운로드 파일명을 [년-월-일] 업무 내용.html 로 변경
             st.download_button("📥 HTML 다운로드", full_html.encode('utf-8'), f"[{r_s}] 업무 내용.html", use_container_width=True)
         with c_btn2: 
             with st.expander("📋 HTML 코드 복사"): 
@@ -696,7 +727,6 @@ with tab_rep:
             xls_hr += f"<tr><td>{ph}</td><td style='text-align:center;'><b>{avg_p}%</b></td><td></td></tr>"
             
         th = "<tr><th style='background:#e0f7fa; padding:8px;'>업무내역</th><th style='background:#e0f7fa; padding:8px;'>진행률</th><th style='background:#e0f7fa; padding:8px;'>예정사항</th></tr>"
-        # 💡 [요청 1번] 엑셀 타이틀도 "업무 내용"으로 수정
         title_txt = "업무 내용"
         xls_html = f"<html><meta charset='utf-8'><style>td {{border: 1px solid #ccc; padding: 8px; vertical-align: top; line-height:1.5;}}</style><body><h2>[{s_w} ~ {e_w}] {title_txt}</h2><table style='border-collapse:collapse; width:100%; border: 1px solid #ccc;'>{th}{xls_hr}</table></body></html>"
         st.download_button("💾 Excel 다운로드 (.xls)", xls_html.encode('utf-8-sig'), f"[{s_w}_{e_w}] 업무 내용.xls")
