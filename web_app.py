@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V37", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V38", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -165,8 +165,15 @@ with st.sidebar:
 
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 
+# 💡 [요청 3번 해결] KPI 이름표 부착 로직
+kpi_dict = {str(k.get('KPI명') or '').strip(): str(k.get('구분') or '공통').strip() for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('KPI명') or '').strip() != ""}
 kpi_owner = target_user if target_user != "전체" else u_name
-my_kpi_opts = sorted(list(set([str(k.get('KPI명') or '') for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('구분') or '공통').strip() in ['공통', kpi_owner] and str(k.get('KPI명') or '').strip() != ""])))
+my_kpi_opts = sorted(list(set([k for k, v in kpi_dict.items() if v in ['공통', kpi_owner]])))
+
+def format_kpi(kpi_name):
+    if kpi_name == "기타": return "기타"
+    owner = kpi_dict.get(kpi_name, '공통')
+    return f"[{owner}] {kpi_name}"
 
 def is_task_visible(d, target_date_str):
     d_id = str(d.get('id'))
@@ -209,11 +216,9 @@ with tabs[0]:
                     n_task = st.text_area("내용 (Alt+Enter: 줄바꿈)", height=100, disabled=disable_edit)
                     c1, c2 = st.columns(2)
                     n_cat = c1.selectbox("분류", cat_list, disabled=disable_edit)
-                    n_kpi = c2.selectbox("KPI", my_kpi_opts + ["기타"], disabled=disable_edit)
-                    
-                    # 💡 [V37] 폼 씹힘 방지 안전 로직
-                    sub_btn = st.form_submit_button("추가", type="primary", disabled=disable_edit)
-                    if sub_btn:
+                    # 💡 KPI 선택 시 format_kpi 함수 적용
+                    n_kpi = c2.selectbox("KPI", my_kpi_opts + ["기타"], format_func=format_kpi, disabled=disable_edit)
+                    if st.form_submit_button("추가", type="primary", disabled=disable_edit):
                         final_task = n_task if sel_opt == "✏️ 직접 입력" else sel_opt
                         if final_task:
                             supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "KPI": n_kpi, "담당자": target_user, "보고서제외": False, "진행중": False}).execute()
@@ -237,11 +242,33 @@ with tabs[0]:
                 e_name = st.text_area("업무명 수정", row.get('업무명') or '', height=80)
                 ec1, ec2 = st.columns(2)
                 e_cat = ec1.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0)
-                e_kpi = ec2.selectbox("KPI", my_kpi_opts + ["기타"], index=(my_kpi_opts + ["기타"]).index(row.get('KPI')) if row.get('KPI') in (my_kpi_opts + ["기타"]) else 0)
+                # 💡 KPI 수정 폼에도 format_kpi 적용
+                e_kpi = ec2.selectbox("KPI", my_kpi_opts + ["기타"], format_func=format_kpi, index=(my_kpi_opts + ["기타"]).index(row.get('KPI')) if row.get('KPI') in (my_kpi_opts + ["기타"]) else 0)
                 eb1, eb2, _ = st.columns([1, 1, 4])
+                
                 if eb1.button("저장", type="primary", key=f"esv_{r_id}"):
-                    supabase.table('daily').update({"업무명": e_name, "분류": e_cat, "KPI": e_kpi}).eq('id', r_id).execute()
+                    # 💡 [요청 1번 해결] 일일업무 편집 시 프로젝트 양방향 동기화
+                    is_proj_task = str(row.get('프로젝트연동') or 'FALSE').upper() == "TRUE"
+                    old_p_info = str(row.get('연결프로젝트') or '')
+                    
+                    if is_proj_task and "::" in old_p_info:
+                        p_n, old_s_n = old_p_info.split("::", 1)
+                        new_p_info = f"{p_n}::{e_name}"
+                        
+                        s_id_match = next((s.get('id') for s in sub_data if s.get('프로젝트명') == p_n and s.get('세부업무명') == old_s_n), None)
+                        if s_id_match: supabase.table('sub_tasks').update({"세부업무명": e_name}).eq('id', s_id_match).execute()
+                            
+                        p_id_match = next((p.get('id') for p in proj_data if p.get('프로젝트명') == p_n), None)
+                        if p_id_match: supabase.table('projects').update({"분류": e_cat, "KPI": e_kpi}).eq('id', p_id_match).execute()
+                            
+                        for d in all_daily:
+                            if str(d.get('연결프로젝트') or '') == old_p_info:
+                                supabase.table('daily').update({"연결프로젝트": new_p_info, "업무명": e_name, "분류": e_cat, "KPI": e_kpi}).eq('id', d.get('id')).execute()
+                    else:
+                        supabase.table('daily').update({"업무명": e_name, "분류": e_cat, "KPI": e_kpi}).eq('id', r_id).execute()
+                        
                     st.session_state['edit_d_id'] = None; apply_changes()
+                    
                 if eb2.button("취소", key=f"ecan_{r_id}"): st.session_state['edit_d_id'] = None; st.rerun()
             continue
             
@@ -285,13 +312,10 @@ with tabs[0]:
             with st.form("add_routine_form", clear_on_submit=True):
                 r_task = st.text_input("새 데일리 업무명 등록", disabled=disable_edit)
                 r_cat = st.selectbox("분류", cat_list, disabled=disable_edit) 
-                r_kpi = st.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=disable_edit)
-                # 💡 [V37] 루틴 추가도 동일하게 폼 씹힘 방지 적용
+                r_kpi = st.selectbox("연관 KPI", my_kpi_opts + ["기타"], format_func=format_kpi, disabled=disable_edit)
                 sub_r_btn = st.form_submit_button("루틴 추가", disabled=disable_edit)
-                if sub_r_btn:
-                    if r_task:
-                        supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "KPI": r_kpi, "담당자": target_user}).execute()
-                        apply_changes()
+                if sub_r_btn and r_task:
+                    supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "KPI": r_kpi, "담당자": target_user}).execute(); apply_changes()
     with c_r2:
         for i, r in enumerate(routine_data):
             if (u_role == "마스터" and target_user == "전체") or r.get('담당자') == target_user:
@@ -314,12 +338,9 @@ with tabs[1]:
                 p_name = pc1.text_input("프로젝트명", disabled=disable_edit)
                 p_cat = pc2.selectbox("분류", cat_list, disabled=disable_edit) 
                 p_start = pc1.date_input("시작일", disabled=disable_edit)
-                p_kpi = pc1.selectbox("연관 KPI", my_kpi_opts + ["기타"], disabled=disable_edit)
-                
-                sub_p_btn = st.form_submit_button("프로젝트 저장", type="primary", disabled=disable_edit)
-                if sub_p_btn:
-                    if p_name:
-                        supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "분류": p_cat, "KPI": p_kpi, "담당자": target_user, "정렬순서": 999, "보고서제외": False}).execute(); apply_changes()
+                p_kpi = pc1.selectbox("연관 KPI", my_kpi_opts + ["기타"], format_func=format_kpi, disabled=disable_edit)
+                if st.form_submit_button("프로젝트 저장", type="primary", disabled=disable_edit) and p_name:
+                    supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "분류": p_cat, "KPI": p_kpi, "담당자": target_user, "정렬순서": 999, "보고서제외": False}).execute(); apply_changes()
 
     for i, p in enumerate(proj_data):
         r_id = p.get('id')
@@ -353,10 +374,8 @@ with tabs[1]:
                 with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
                     sc1, sc2 = st.columns([4,1])
                     new_sub = sc1.text_area("세부 업무 추가", height=80, disabled=disable_edit)
-                    sub_s_btn = sc2.form_submit_button("추가", disabled=disable_edit)
-                    if sub_s_btn:
-                        if new_sub:
-                            supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "담당자": target_user, "보고서제외": False, "진행중": False}).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
+                    if sc2.form_submit_button("추가", disabled=disable_edit) and new_sub:
+                        supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "담당자": target_user, "보고서제외": False, "진행중": False}).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id')
                 sl1, sl2, sl3, sl4, sl5, sl6, sl7 = st.columns([3.5, 2.5, 1, 1.2, 1, 0.6, 0.6])
@@ -386,7 +405,7 @@ with tabs[1]:
                     supabase.table('projects').delete().eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
 
 # ==========================================
-# 탭 3~5 (설정 및 KPI 유지)
+# 탭 3~5 (설정 유지)
 # ==========================================
 if u_role == "마스터":
     with tab_set1:
@@ -430,6 +449,18 @@ if u_role == "마스터":
 
 with tab_kpi:
     st.header(f"📈 {target_user} KPI" if target_user != "전체" else "📈 전사 통합 KPI")
+    
+    # 💡 [요청 2번 해결] 일반 직원용 KPI 지표 열람 기능 추가
+    with st.expander("📋 할당된 KPI 지표 목록 보기", expanded=False):
+        my_kpi_list = [k for k in kpi_config if str(k.get('구분') or '공통').strip() in ['공통', kpi_owner] and str(k.get('KPI명') or '').strip() != ""]
+        if my_kpi_list:
+            df_kpi = pd.DataFrame(my_kpi_list)
+            cols_to_show = [c for c in df_kpi.columns if c not in ['id', 'created_at']]
+            st.dataframe(df_kpi[cols_to_show], use_container_width=True)
+        else:
+            st.info("할당된 KPI 지표가 없습니다.")
+    st.divider()
+
     stats = {}
     for d in all_daily:
         owner = str(d.get('담당자') or '알수없음')
@@ -450,7 +481,7 @@ with tab_kpi:
     else: st.info("데이터가 없습니다.")
 
 # ==========================================
-# 탭 5: 데이터/보고서 (💡 V37 핵심 수정 반영)
+# 탭 5: 데이터/보고서 
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
@@ -470,7 +501,6 @@ with tab_rep:
     st.subheader("🖨️ 맞춤형 보고서 출력")
     r_type = st.radio("보고서 종류", ["일일(HTML)", "기간별(Excel)"], horizontal=True)
     
-    # 💡 맑은 고딕 폰트 세팅 변수
     font_css = "font-family: 'Malgun Gothic', '맑은 고딕', sans-serif;"
     
     if r_type == "일일(HTML)":
@@ -521,7 +551,6 @@ with tab_rep:
                 h_p_html += f"<li style='margin-bottom:5px;'>{icon} {str(s.get('세부업무명') or '').replace(chr(10), '<br>')} {pr_t}</li>"
             h_p_html += "</ul></div>"
             
-        # 💡 일일 보고서 맑은 고딕 강제 적용
         full_html = f"<html><head><meta charset='utf-8'></head><body style='{font_css}'><h2>[{r_s}] 업무 내용</h2><h3>■ 일일 업무</h3><ul style='line-height:1.5;'>{h_d_html}</ul><hr><h3>■ 고정 업무</h3><ul style='line-height:1.5;'>{h_r_html}</ul><hr><h3>■ 프로젝트 현황</h3>{h_p_html}</body></html>"
         st.components.v1.html(full_html, height=400, scrolling=True)
         c_btn1, c_btn2 = st.columns([1, 1])
@@ -533,10 +562,7 @@ with tab_rep:
         c_ds1, c_ds2 = st.columns(2)
         s_w, e_w = c_ds1.date_input("시작일", today_kst - datetime.timedelta(days=7), key="ws"), c_ds2.date_input("종료일", today_kst, key="we")
         
-        # 💡 [V37 핵심 수정] 엑셀에 들어갈 모든 데이터(프로젝트, 일일업무, 루틴) 싹 끌어오기
         export_items = []
-        
-        # 1. 프로젝트 업무 끌어오기
         rep_proj = [p for p in proj_data if (target_user == "전체" or p.get('담당자') == target_user) and not bool(p.get('보관함이동', False)) and not bool(p.get('보고서제외', False))]
         for p in rep_proj:
             pn = p.get('프로젝트명') or ''
@@ -551,7 +577,6 @@ with tab_rep:
             avg_p = int(total_p / len(valid_subs))
             export_items.append({'cat': cat, 'content': ph, 'prog': avg_p})
             
-        # 2. 일반 데일리 업무 끌어오기 (선택한 기간 내)
         s_w_str, e_w_str = s_w.strftime("%Y-%m-%d"), e_w.strftime("%Y-%m-%d")
         daily_period = [d for d in all_daily if s_w_str <= str(d.get('날짜') or '') <= e_w_str and (target_user == "전체" or d.get('담당자') == target_user) and not bool(d.get('보고서제외', False)) and str(d.get('프로젝트연동') or 'FALSE').upper() != "TRUE"]
         for d in daily_period:
@@ -562,14 +587,12 @@ with tab_rep:
             ph = f"{task_n} <span style='color:#777; font-size:0.85em;'>({d_date})</span>"
             export_items.append({'cat': cat, 'content': ph, 'prog': prog})
             
-        # 3. 루틴 업무 끌어오기
         routines_period = [r for r in routine_data if (target_user == "전체" or r.get('담당자') == target_user)]
         for r in routines_period:
             cat = r.get('분류') or '기타'
             task_n = str(r.get('업무명') or '').replace(chr(10), '<br>')
             export_items.append({'cat': cat, 'content': f"<b>[루틴]</b> {task_n}", 'prog': 100})
             
-        # 💡 분류(카테고리) 기준으로 예쁘게 정렬
         export_items = sorted(export_items, key=lambda x: x['cat'])
         
         xls_hr = ""
