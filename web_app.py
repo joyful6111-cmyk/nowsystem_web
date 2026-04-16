@@ -288,16 +288,19 @@ with tabs[0]:
                 if str(r_id) not in st.session_state['finished_today']:
                     st.session_state['finished_today'].append(str(r_id))
             
-            # 💡 [진행률 동기화 수정] 공백 제거 및 문자열 강제 변환으로 완벽 매칭
+            # 💡 [진행률 동기화 최종수정] :: 기호를 기준으로 양쪽 단어를 완벽하게 분리하여 공백을 제거한 뒤 비교
             if str(row.get('프로젝트연동') or 'FALSE').upper() == "TRUE":
-                p_info = str(row.get('연결프로젝트') or '').strip()
+                p_info = str(row.get('연결프로젝트') or '')
                 if "::" in p_info:
                     p_n, s_n = p_info.split("::", 1)
-                    p_n, s_n = p_n.strip(), s_n.strip() # 혹시 모를 공백 제거
+                    p_n, s_n = p_n.strip(), s_n.strip() # 양옆 공백 완벽 제거
                     
-                    s_id_match = next((s.get('id') for s in sub_data if str(s.get('프로젝트명') or '').strip() == p_n and str(s.get('세부업무명') or '').strip() == s_n), None)
-                    if s_id_match: 
-                        supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s_id_match).execute()
+                    for s_item in sub_data:
+                        db_p_n = str(s_item.get('프로젝트명') or '').strip()
+                        db_s_n = str(s_item.get('세부업무명') or '').strip()
+                        if db_p_n == p_n and db_s_n == s_n:
+                            supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s_item.get('id')).execute()
+                            break
             apply_changes()
             
         is_ex = bool(row.get('보고서제외', False))
@@ -414,15 +417,21 @@ with tabs[1]:
                 if not disable_edit and sp != cur_sp:
                     supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s_id).execute()
                     
-                    # 💡 [수정 1-2] 프로젝트 -> 일일업무 진행률 동기화 (공백 제거로 완벽 매칭 보장)
+                    # 💡 [진행률 동기화 최종수정] 연결프로젝트 문자열을 분해하여 각각의 단어를 정확히 대조
+                    target_p_n = str(pn).strip()
+                    target_s_n = str(s.get('세부업무명') or '').strip()
+                    
                     for d in all_daily:
-                        d_link = str(d.get('연결프로젝트') or '').strip()
-                        s_link = f"{pn}::{s.get('세부업무명')}".strip()
-                        if d_link == s_link:
-                            supabase.table('daily').update({"진행률": sp}).eq('id', d.get('id')).execute()
+                        if str(d.get('프로젝트연동') or 'FALSE').upper() == "TRUE":
+                            d_info = str(d.get('연결프로젝트') or '')
+                            if "::" in d_info:
+                                d_p_n, d_s_n = d_info.split("::", 1)
+                                if d_p_n.strip() == target_p_n and d_s_n.strip() == target_s_n:
+                                    supabase.table('daily').update({"진행률": sp}).eq('id', d.get('id')).execute()
                             
                     st.session_state['active_proj_id'] = str(r_id); apply_changes()
-                
+               
+               
                 if sl3.button("✅완료", key=f"sdone_{s_id}", disabled=disable_edit):
                     supabase.table('sub_tasks').update({"진행률": 100}).eq('id', s_id).execute()
                     for d in all_daily:
