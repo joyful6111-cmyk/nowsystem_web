@@ -288,12 +288,16 @@ with tabs[0]:
                 if str(r_id) not in st.session_state['finished_today']:
                     st.session_state['finished_today'].append(str(r_id))
             
+            # 💡 [진행률 동기화 수정] 공백 제거 및 문자열 강제 변환으로 완벽 매칭
             if str(row.get('프로젝트연동') or 'FALSE').upper() == "TRUE":
                 p_info = str(row.get('연결프로젝트') or '')
                 if "::" in p_info:
                     p_n, s_n = p_info.split("::", 1)
-                    s_id_match = next((s.get('id') for s in sub_data if s.get('프로젝트명') == p_n and s.get('세부업무명') == s_n), None)
-                    if s_id_match: supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s_id_match).execute()
+                    p_n, s_n = p_n.strip(), s_n.strip() # 혹시 모를 공백 제거
+                    
+                    s_id_match = next((s.get('id') for s in sub_data if str(s.get('프로젝트명') or '').strip() == p_n and str(s.get('세부업무명') or '').strip() == s_n), None)
+                    if s_id_match: 
+                        supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', s_id_match).execute()
             apply_changes()
             
         is_ex = bool(row.get('보고서제외', False))
@@ -355,7 +359,8 @@ with tabs[1]:
         my_s_list = sub_dict.get(pn, [])
         total_p = sum(int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0 for s in my_s_list)
         avg_p = int(total_p / len(my_s_list)) if len(my_s_list) > 0 else 0
-        is_expanded = (st.session_state.get('active_proj_id') == r_id)
+        # 💡 [폴더 닫힘 방지] ID를 문자로 강제 통일하여 렌더링 시 폴더가 닫히는 현상 차단
+        is_expanded = (str(st.session_state.get('active_proj_id')) == str(r_id))
         with st.expander(f"📂 {pn} [{p.get('분류')}] - 📊 {avg_p}% {owner}", expanded=is_expanded):
             set_c1, set_c2, set_c3 = st.columns([1, 1, 1.5])
             cur_ord = int(p.get('정렬순서') or 999)
@@ -432,8 +437,9 @@ with tabs[1]:
                     if not disable_edit: supabase.table('sub_tasks').update({"보고서제외": not s_ex}).eq('id', s_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
                 
                 if not is_readonly:
-                    if sl6.button("✏️수정", key=f"sedt_{s_id}", disabled=disable_edit): st.session_state['edit_s_id'] = s_id; st.session_state['active_proj_id'] = r_id; st.rerun()
-                    if sl7.button("🗑️삭제", key=f"sdel_{s_id}", disabled=disable_edit): supabase.table('sub_tasks').delete().eq('id', s_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
+                    # 💡 [버튼 먹통 해결] 저장하는 ID들을 모두 str()로 감싸서 문자열로 확정
+                    if sl6.button("✏️수정", key=f"sedt_{s_id}", disabled=disable_edit): st.session_state['edit_s_id'] = str(s_id); st.session_state['active_proj_id'] = str(r_id); st.rerun()
+                    if sl7.button("🗑️삭제", key=f"sdel_{s_id}", disabled=disable_edit): supabase.table('sub_tasks').delete().eq('id', s_id).execute(); st.session_state['active_proj_id'] = str(r_id); apply_changes()
             st.write("---")
             if not is_readonly:
                 ac1, ac2 = st.columns([1,1])
@@ -442,7 +448,7 @@ with tabs[1]:
                     supabase.table('projects').update({"보관함이동": True}).eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
                 if ac2.button("🗑️ 삭제", key=f"pdel_{r_id}", disabled=disable_edit):
                     supabase.table('projects').delete().eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
-
+  
 # ==========================================
 # 탭 3~5 (설정 유지)
 # ==========================================
