@@ -516,9 +516,36 @@ if u_role == "마스터":
                     supabase.table('users').upsert(r).execute()
                 apply_changes()
         with c2:
+            st.subheader("✨ KPI 지표 상세 등록")
+            with st.form("add_kpi_form", clear_on_submit=True):
+                kc1, kc2 = st.columns(2)
+                n_k_name = kc1.text_input("KPI명 (예: 일계표 오류 건수)")
+                n_k_owner = kc2.selectbox("적용자(담당자)", ["공통"] + sorted(list(set([u.get('이름') for u in user_data if u.get('이름')]))))
+                
+                kc3, kc4, kc5 = st.columns([1, 1.5, 1])
+                n_k_score = kc3.text_input("배점 (예: 10)")
+                n_k_range = kc4.text_input("배점구간 (예: 0건 10점 / 1건 6점)")
+                n_k_cycle = kc5.text_input("주기 (예: 월, 분기, 연간)")
+                
+                n_k_target = st.text_input("목표값 (예: 0건, 100% 완료)")
+                n_k_desc = st.text_area("상세 예시 및 산출식")
+                
+                if st.form_submit_button("➕ 지표 등록", type="primary"):
+                    if n_k_name:
+                        supabase.table('settings').insert({
+                            "KPI명": n_k_name, "구분": n_k_owner, "배점": n_k_score,
+                            "배점구간": n_k_range, "주기": n_k_cycle, "목표값": n_k_target, "상세예시": n_k_desc
+                        }).execute()
+                        apply_changes()
+                        
+            st.write("---")
             k_df = pd.DataFrame(kpi_config)
+            # 신규 컬럼들이 없을 경우를 대비해 빈 문자열로 초기화
+            for col in ['배점', '배점구간', '주기', '목표값', '상세예시']:
+                if col not in k_df.columns: k_df[col] = ""
+                
             e_k_df = st.data_editor(k_df, num_rows="dynamic", use_container_width=True)
-            if st.button("KPI 지표 저장"):
+            if st.button("💾 KPI 목록 일괄 저장"):
                 orig_k_ids = set(k_df['id'].dropna()) if 'id' in k_df.columns else set()
                 new_k_ids = set(e_k_df['id'].dropna()) if 'id' in e_k_df.columns else set()
                 for did in orig_k_ids - new_k_ids: supabase.table('settings').delete().eq('id', did).execute()
@@ -543,13 +570,17 @@ if u_role == "마스터":
 with tab_kpi:
     st.header(f"📈 {target_user} KPI" if target_user != "전체" else "📈 전사 통합 KPI")
     
-    # 💡 [요청 2번 해결] 일반 직원용 KPI 지표 열람 기능 추가
-    with st.expander("📋 할당된 KPI 지표 목록 보기", expanded=False):
+    # 💡 일반 직원용 KPI 지표 열람 기능 (상세 정보 포함)
+    with st.expander("📋 할당된 KPI 지표 상세 목록 보기", expanded=False):
         my_kpi_list = [k for k in kpi_config if str(k.get('구분') or '공통').strip() in ['공통', kpi_owner] and str(k.get('KPI명') or '').strip() != ""]
         if my_kpi_list:
             df_kpi = pd.DataFrame(my_kpi_list)
-            cols_to_show = [c for c in df_kpi.columns if c not in ['id', 'created_at']]
-            st.dataframe(df_kpi[cols_to_show], use_container_width=True)
+            for col in ['배점', '배점구간', '주기', '목표값', '상세예시']:
+                if col not in df_kpi.columns: df_kpi[col] = ""
+            
+            # 보기 좋은 순서로 컬럼 재배치
+            display_cols = [c for c in ['구분', 'KPI명', '배점', '배점구간', '주기', '목표값', '상세예시'] if c in df_kpi.columns]
+            st.dataframe(df_kpi[display_cols], use_container_width=True)
         else:
             st.info("할당된 KPI 지표가 없습니다.")
     st.divider()
@@ -557,21 +588,47 @@ with tab_kpi:
     stats = {}
     for d in all_daily:
         owner = str(d.get('담당자') or '알수없음')
+        k_name = str(d.get('KPI') or '기타').strip()
+        
         if u_role != "마스터" and owner != u_name: continue
         if u_role == "마스터" and target_user != "전체" and owner != target_user: continue
-        k_name = str(d.get('KPI') or '기타').strip()
+        if k_name == "기타": continue  # '기타' 항목은 통계에서 제외
+        
         stat_key = f"[{owner}] {k_name}" if u_role == "마스터" and target_user == "전체" else k_name
-        if stat_key not in stats: stats[stat_key] = {"sum": 0, "count": 0}
+        if stat_key not in stats: stats[stat_key] = {"sum": 0, "count": 0, "tasks": []}
+        
         p_val = str(d.get('진행률') or '0')
         stats[stat_key]["sum"] += int(p_val) if p_val.isdigit() else 0
         stats[stat_key]["count"] += 1
+        stats[stat_key]["tasks"].append(d)  # 달성률 계산에 사용된 업무 원본 저장
+
     if stats:
         for stat_key in sorted(stats.keys()):
             data = stats[stat_key]
             avg = int(data["sum"] / data["count"]) if data["count"] > 0 else 0
-            st.write(f"**{stat_key}** (총 {data['count']}건)")
-            st.progress(avg / 100, text=f"평균 달성률: {avg}%")
-    else: st.info("데이터가 없습니다.")
+            
+            # 💡 클릭하면 세부 업무 리스트가 나오는 아코디언(Expander) 형태
+            with st.expander(f"**{stat_key}** (평균 달성률: {avg}%, 총 {data['count']}건)"):
+                st.progress(avg / 100, text=f"평균 달성률: {avg}%")
+                st.markdown("---")
+                st.markdown("<small>📌 반영된 업무 리스트</small>", unsafe_allow_html=True)
+                
+                for t in data["tasks"]:
+                    t_id = t.get('id')
+                    t_date = t.get('날짜') or ''
+                    t_prog = t.get('진행률') or 0
+                    t_name = str(t.get('업무명') or '').replace(chr(10), ' ')
+                    
+                    kt1, kt2, kt3 = st.columns([5, 2, 1.5])
+                    kt1.write(f"· {t_name}")
+                    kt2.write(f"{t_date} ({t_prog}%)")
+                    
+                    # 💡 해당없음 버튼 (해당 업무의 KPI 항목을 '기타'로 변경하여 제외시킴)
+                    if not is_readonly and kt3.button("🚫 해당없음", key=f"kpiex_{t_id}"):
+                        supabase.table('daily').update({"KPI": "기타"}).eq('id', t_id).execute()
+                        apply_changes()
+    else: 
+        st.info("KPI에 반영된 업무 데이터가 없습니다.")
   
 # ==========================================
 # 탭 5: 데이터/보고서 
