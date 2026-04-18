@@ -463,7 +463,7 @@ with tabs[1]:
                     supabase.table('projects').delete().eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
                     # ----------------------------------------------------------------------
 # ▼▼▼ [여기서부터 새로 추가할 코드] ▼▼▼
-    st.divider()
+st.divider()
     with st.expander("📦 프로젝트 보관함 (종료된 업무)"):
         archived_projs = [p for p in proj_data if str(p.get("보관함이동") or 'FALSE').upper() == "TRUE"]
         
