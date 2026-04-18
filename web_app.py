@@ -461,40 +461,41 @@ with tabs[1]:
                     supabase.table('projects').update({"보관함이동": True}).eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
                 if ac2.button("🗑 삭제", key=f"pdel_{r_id}", disabled=disable_edit):
                     supabase.table('projects').delete().eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
-                    # ----------------------------------------------------------------------
-# ▼▼▼ [여기서부터 새로 추가할 코드] ▼▼▼
-st.divider()
-    with st.expander("📦 프로젝트 보관함 (종료된 업무)"):
-        archived_projs = [p for p in proj_data if str(p.get("보관함이동") or 'FALSE').upper() == "TRUE"]
-        
-        # 현재 보고 있는 대상자(target_user)에 맞게 보관함 필터링
-        if u_role != "마스터" or target_user != "전체":
-            archived_projs = [p for p in archived_projs if p.get('담당자') == target_user]
+                    
+    # ----------------------------------------------------------------------
+    # ▼▼▼ [여기서부터 새로 추가할 코드] ▼▼▼
+    st.divider()
+    with st.expander("📦 프로젝트 보관함 (종료된 업무)"):
+        archived_projs = [p for p in proj_data if str(p.get("보관함이동") or 'FALSE').upper() == "TRUE"]
+        
+        # 현재 보고 있는 대상자(target_user)에 맞게 보관함 필터링
+        if u_role != "마스터" or target_user != "전체":
+            archived_projs = [p for p in archived_projs if p.get('담당자') == target_user]
 
-        if not archived_projs:
-            st.info("보관함에 있는 프로젝트가 없습니다.")
-        else:
-            for p in archived_projs:
-                arc_id = p.get('id')
-                arc_pn = p.get('프로젝트명') or ''
-                arc_owner = f" ({p.get('담당자') or ''})" if u_role == "마스터" and target_user == "전체" else ""
-                arc_cat = p.get('분류') or '기타'
-                arc_end = p.get('완료일') or '미지정'
+        if not archived_projs:
+            st.info("보관함에 있는 프로젝트가 없습니다.")
+        else:
+            for p in archived_projs:
+                arc_id = p.get('id')
+                arc_pn = p.get('프로젝트명') or ''
+                arc_owner = f" ({p.get('담당자') or ''})" if u_role == "마스터" and target_user == "전체" else ""
+                arc_cat = p.get('분류') or '기타'
+                arc_end = p.get('완료일') or '미지정'
 
-                arc_c1, arc_c2, arc_c3, arc_c4 = st.columns([4, 2, 1.5, 1.5])
-                arc_c1.markdown(f"**[{arc_cat}]** <span style='color:#777; text-decoration: line-through;'>{arc_pn}</span>{arc_owner}", unsafe_allow_html=True)
-                arc_c2.write(f"완료일: {arc_end}")
+                arc_c1, arc_c2, arc_c3, arc_c4 = st.columns([4, 2, 1.5, 1.5])
+                arc_c1.markdown(f"**[{arc_cat}]** <span style='color:#777; text-decoration: line-through;'>{arc_pn}</span>{arc_owner}", unsafe_allow_html=True)
+                arc_c2.write(f"완료일: {arc_end}")
 
-                if not is_readonly:
-                    if arc_c3.button("🔄 복구", key=f"unarc_{arc_id}", disabled=disable_edit):
-                        supabase.table('projects').update({"보관함이동": False}).eq('id', arc_id).execute()
-                        st.session_state['active_proj_id'] = arc_id
-                        apply_changes()
-                    if arc_c4.button("🗑 영구삭제", key=f"harddel_{arc_id}", disabled=disable_edit):
-                        supabase.table('projects').delete().eq('id', arc_id).execute()
-                        apply_changes()
-# ▲▲▲ [여기까지 새로 추가할 코드] ▲▲▲
-# ----------------------------------------------------------------------
+                if not is_readonly:
+                    if arc_c3.button("🔄 복구", key=f"unarc_{arc_id}", disabled=disable_edit):
+                        supabase.table('projects').update({"보관함이동": False}).eq('id', arc_id).execute()
+                        st.session_state['active_proj_id'] = arc_id
+                        apply_changes()
+                    if arc_c4.button("🗑 영구삭제", key=f"harddel_{arc_id}", disabled=disable_edit):
+                        supabase.table('projects').delete().eq('id', arc_id).execute()
+                        apply_changes()
+    # ▲▲▲ [여기까지 새로 추가할 코드] ▲▲▲
+    # ----------------------------------------------------------------------
   
 # ==========================================
 # 탭 3~5 (설정 유지)
