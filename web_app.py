@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V52 (게시판 새창 UI 개편)", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V52", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -63,7 +63,6 @@ if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
 if 'edit_kpi_id' not in st.session_state: st.session_state['edit_kpi_id'] = None
 if 'edit_detail_id' not in st.session_state: st.session_state['edit_detail_id'] = None
 if 'edit_board_id' not in st.session_state: st.session_state['edit_board_id'] = None
-# 💡 [신규] 넓은 화면 게시판 출력을 위한 세션
 if 'active_modal_board' not in st.session_state: st.session_state['active_modal_board'] = None
 
 def check_login(user_id, user_pw):
@@ -124,7 +123,7 @@ def get_monday(date_obj):
     return date_obj - datetime.timedelta(days=date_obj.weekday())
 current_monday_str = get_monday(today_kst).strftime("%Y-%m-%d")
 
-# 💡 [신규] 넓은 메인화면 출력용 게시판 렌더링 함수
+# 넓은 메인화면 출력용 게시판 렌더링 함수
 def render_shared_board_full_width(board_type, title, is_weekly=False):
     c_back, _ = st.columns([2, 8])
     if c_back.button("🔙 메인 화면으로 돌아가기", type="primary", use_container_width=True):
@@ -153,7 +152,6 @@ def render_shared_board_full_width(board_type, title, is_weekly=False):
                     st.session_state['edit_board_id'] = None; st.rerun()
         else:
             with st.container(border=True):
-                # 가독성을 위해 넓게 배치 [내용 8 : 버튼 2]
                 sc1, sc2 = st.columns([8, 2])
                 status_badge = "✅ 완료" if b.get('status') == '완료' else "▶ 진행중"
                 sc1.markdown(f"**👤 {b.get('author')}** | {status_badge}")
@@ -213,7 +211,6 @@ with st.sidebar:
         if st.button("🔒 일과 마감하기", use_container_width=True, type="primary"): st.session_state[lock_key] = True; st.rerun()
   
     st.divider()
-    # 💡 [변경] 사이드바에서는 오직 '버튼'만 제공하여 클릭 시 메인 화면으로 전환
     st.markdown("**📂 부서 공용 게시판**")
     if st.button("📬 타 부서 요청 사항", use_container_width=True):
         st.session_state['active_modal_board'] = ('요청사항', "📬 타 부서 요청 사항 (공용)", False)
@@ -237,14 +234,13 @@ with st.sidebar:
         except Exception: pass
         st.session_state['logged_in'] = False; st.rerun()
 
-# 💡 [핵심] 사이드바 게시판 버튼이 눌렸을 때 메인 화면 전체를 덮어쓰는 로직
+# 💡 사이드바 게시판 버튼이 눌렸을 때 메인 화면 전체를 덮어쓰는 로직
 if st.session_state.get('active_modal_board'):
     b_type, b_title, b_weekly = st.session_state['active_modal_board']
     render_shared_board_full_width(b_type, b_title, b_weekly)
-    st.stop() # st.stop()을 호출하여 하단의 일과/프로젝트/KPI 탭 렌더링을 차단하고 게시판만 보여줍니다.
+    st.stop()
 
 # ----------------------------------------------------------------------
-# 아래부터는 메인 화면 (게시판이 꺼져 있을 때만 보임)
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 
 def is_task_visible(d, target_date_str):
@@ -274,7 +270,7 @@ for s in sub_data:
     if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 💡 콜백 함수 세팅 
+# 💡 자동 동기화용 콜백 함수 세팅
 # ==========================================
 daily_to_sub = {}
 sub_to_daily = {}
@@ -353,14 +349,17 @@ with tabs[0]:
     st.divider()
     for i, row in enumerate(filtered_daily):
         r_id = row.get('id')
+        
         if not is_readonly and str(st.session_state.get('edit_d_id')) == str(r_id):
             with st.container(border=True):
                 e_name = st.text_area("업무명 수정", row.get('업무명') or '', height=80, key=f"ed_name_{r_id}")
                 e_cat = st.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0, key=f"ed_cat_{r_id}")
                 eb1, eb2, _ = st.columns([1, 1, 4])
+                
                 if eb1.button("저장", type="primary", key=f"esv_{r_id}"):
                     is_proj_task = str(row.get('프로젝트연동') or 'FALSE').upper() == "TRUE"
                     old_p_info = str(row.get('연결프로젝트') or '')
+                    
                     if is_proj_task and "::" in old_p_info:
                         p_n, old_s_n = old_p_info.split("::", 1)
                         new_p_info = f"{p_n}::{e_name}"
@@ -371,7 +370,9 @@ with tabs[0]:
                         for d in all_daily:
                             if str(d.get('연결프로젝트') or '') == old_p_info:
                                 supabase.table('daily').update({"연결프로젝트": new_p_info, "업무명": e_name, "분류": e_cat}).eq('id', d.get('id')).execute()
-                    else: supabase.table('daily').update({"업무명": e_name, "분류": e_cat}).eq('id', r_id).execute()
+                    else:
+                        supabase.table('daily').update({"업무명": e_name, "분류": e_cat}).eq('id', r_id).execute()
+                        
                     st.session_state['edit_d_id'] = None; apply_changes()
                 if eb2.button("취소", key=f"ecan_{r_id}"): st.session_state['edit_d_id'] = None; st.rerun()
             continue
@@ -472,6 +473,7 @@ with tabs[1]:
                 if not disable_edit: supabase.table('projects').update({"보고서제외": not p_ex}).eq('id', r_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
             if not is_readonly:
                 with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
+                    # 💡 [버그픽스] 컬럼 스플릿 복원 완료
                     sc1, sc2 = st.columns([4,1])
                     new_sub = sc1.text_area("세부 업무 추가", height=80, disabled=disable_edit, key=f"new_sub_{r_id}")
                     if sc2.form_submit_button("추가", disabled=disable_edit) and new_sub:
@@ -585,8 +587,8 @@ with tab_kpi:
     def format_target(val, unit):
         try: v = int(val)
         except: v = val
-        if unit == "금액(원)": return f"{v:,}원"
-        elif unit == "요율(%)": return f"{v}%"
+        if unit == "금액": return f"{v:,}원"
+        elif unit == "요율": return f"{v}%"
         else: return f"{v}건"
 
     def calculate_kpi_score(target, submissions):
@@ -654,10 +656,14 @@ with tab_kpi:
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
                 sc3_u, sc3_v, sc4, sc5 = st.columns([1, 1.5, 1, 1.5])
-                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율(%)", "금액(원)"])
-                if t_unit == "금액(원)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=0, step=100000)
-                elif t_unit == "요율(%)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=100, step=5)
-                else: t_count = sc3_v.number_input("목표 수치", min_value=0, value=14, step=1)
+                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율", "금액"])
+                
+                if t_unit == "금액":
+                    t_count = sc3_v.number_input("목표 수치 (단위: 원)", min_value=0, value=0, step=100000)
+                elif t_unit == "요율":
+                    t_count = sc3_v.number_input("목표 수치 (단위: %)", min_value=0, value=100, step=5)
+                else:
+                    t_count = sc3_v.number_input("목표 수치 (단위: 건)", min_value=0, value=14, step=1)
                 
                 t_weight = sc4.number_input("배점", value=15)
                 t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
@@ -682,12 +688,12 @@ with tab_kpi:
                         e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
                         ec3_u, ec3_v, ec4, ec5 = st.columns([1, 1.5, 1, 1.5])
                         cur_unit = target.get('unit', '건수')
-                        unit_opts = ["건수", "요율(%)", "금액(원)"]
+                        unit_opts = ["건수", "요율", "금액"]
                         e_unit = ec3_u.selectbox("목표 단위", unit_opts, index=unit_opts.index(cur_unit) if cur_unit in unit_opts else 0, key=f"eku_{t_id}_{i}")
                         
-                        if e_unit == "금액(원)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
-                        elif e_unit == "요율(%)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
-                        else: e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
+                        if e_unit == "금액": e_cnt = ec3_v.number_input("목표 수치 (원)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
+                        elif e_unit == "요율": e_cnt = ec3_v.number_input("목표 수치 (%)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
+                        else: e_cnt = ec3_v.number_input("목표 수치 (건)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
                         
                         e_wgt = ec4.number_input("배점", value=int(target.get('weight') or 0), key=f"ekw_{t_id}_{i}")
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
@@ -845,7 +851,7 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 데이터/보고서 
+# 탭 5: 데이터/보고서 (엑셀 고정 텍스트 반영)
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
@@ -944,7 +950,22 @@ with tab_rep:
         fixed_notes = {}
         with st.expander("고정 내용 입력 열기"):
             for cat in excel_sort_order:
-                fixed_notes[cat] = st.text_area(f"[{cat}] 주간 고정 내용", key=f"fn_{cat}")
+                f_record = next((f for f in fixed_contents if f.get('category_name') == cat), None)
+                f_id = f_record.get('id') if f_record else None
+                f_text = f_record.get('content', '') if f_record else ''
+                
+                with st.container(border=True):
+                    f_col1, f_col2 = st.columns([8, 2])
+                    f_input = f_col1.text_area(f"[{cat}]", value=f_text, key=f"f_input_{cat}", height=68, label_visibility="collapsed")
+                    
+                    fb1, fb2 = f_col2.columns(2)
+                    if fb1.button("저장", key=f"fsave_{cat}"):
+                        if f_id: supabase.table('fixed_contents').update({"content": f_input}).eq('id', f_id).execute()
+                        else: supabase.table('fixed_contents').insert({"category_name": cat, "content": f_input}).execute()
+                        st.success(f"[{cat}] 저장 완료!"); time.sleep(0.5); apply_changes()
+                    if fb2.button("삭제", key=f"fdel_{cat}"):
+                        if f_id: supabase.table('fixed_contents').delete().eq('id', f_id).execute()
+                        st.success(f"[{cat}] 삭제 완료!"); time.sleep(0.5); apply_changes()
         
         daily_period = [d for d in all_daily if s_w_str <= str(d.get('날짜') or '') <= e_w_str and (target_user == "전체" or d.get('담당자') == target_user) and not bool(d.get('보고서제외', False)) and str(d.get('프로젝트연동') or 'FALSE').upper() != "TRUE" and not bool(d.get('is_copied', False))]
         rep_proj = [p for p in proj_data if (target_user == "전체" or p.get('담당자') == target_user) and not bool(p.get('보관함이동', False)) and not bool(p.get('보고서제외', False))]
@@ -963,12 +984,12 @@ with tab_rep:
             matched_cat = match_category(d.get('분류') or '기타')
             t_n = str(d.get('업무명') or '').replace(chr(10), '<br>')
             prog = int(str(d.get('진행률') or '0'))
-            excel_data[matched_cat].append({'type': 'daily', 'content': f"· {t_n}", 'prog': prog, 'next': ''})
+            excel_data[matched_cat].append({'type': 'daily', 'content': f"· {t_n}", 'prog': prog})
             
         for r in routines_period:
             matched_cat = match_category(r.get('분류') or '기타')
             t_n = str(r.get('업무명') or '').replace(chr(10), '<br>')
-            excel_data[matched_cat].append({'type': 'routine', 'content': f"<b>[루틴]</b> {t_n}", 'prog': 100, 'next': ''})
+            excel_data[matched_cat].append({'type': 'routine', 'content': f"<b>[루틴]</b> {t_n}", 'prog': 100})
             
         for p in rep_proj:
             matched_cat = match_category(p.get('분류') or '기타')
@@ -983,7 +1004,7 @@ with tab_rep:
                 total_p += prog
                 ph += f"- {str(s.get('세부업무명') or '').replace(chr(10), '<br>')} ({prog}%)<br>"
             avg_p = int(total_p / len(valid_subs))
-            excel_data[matched_cat].append({'type': 'project', 'content': ph, 'prog': avg_p, 'next': ''})
+            excel_data[matched_cat].append({'type': 'project', 'content': ph, 'prog': avg_p})
 
         for issue in current_issues:
             b_type = issue.get('board_type')
@@ -991,33 +1012,35 @@ with tab_rep:
             status_text = f" ({issue.get('status')})"
             prog = 100 if issue.get('status') == '완료' else 50
             if b_type == '요청사항':
-                excel_data['요청사항'].append({'type': 'issue', 'content': f"· <b>[타부서요청]</b> {c_text}{status_text}", 'prog': prog, 'next': ''})
+                excel_data['요청사항'].append({'type': 'issue', 'content': f"· <b>[타부서요청]</b> {c_text}{status_text}", 'prog': prog})
             elif b_type == '세금계산서':
-                excel_data['재무'].append({'type': 'issue', 'content': f"· <b>[세금계산서]</b> {c_text}{status_text}", 'prog': prog, 'next': ''})
+                excel_data['재무'].append({'type': 'issue', 'content': f"· <b>[세금계산서]</b> {c_text}{status_text}", 'prog': prog})
             elif b_type in ['분납서', '보증보험']:
-                excel_data['현장'].append({'type': 'issue', 'content': f"· <b>[{b_type}]</b> {c_text}{status_text}", 'prog': prog, 'next': ''})
+                excel_data['현장'].append({'type': 'issue', 'content': f"· <b>[{b_type}]</b> {c_text}{status_text}", 'prog': prog})
         
         xls_hr = ""
         for cat in excel_sort_order + ['기타']:
             items = excel_data[cat]
-            f_note = fixed_notes.get(cat, "").replace('\n', '<br>')
+            f_record = next((f for f in fixed_contents if f.get('category_name') == cat), None)
+            f_note = f_record.get('content', '').replace('\n', '<br>') if f_record else ""
             
             if not items and not f_note: continue
             
             cat_html = f"<b>{cat}</b>"
-            if f_note: cat_html += f"<br><br><span style='color:#0066cc; font-size:0.9em;'>[주간고정]<br>{f_note}</span>"
             
-            content_html = ""
-            if not items: content_html = "특이사항 없음"
-            else:
-                for it in items:
-                    p_str = f" ({it['prog']}%)" if it['type'] in ['daily', 'issue'] else ""
-                    content_html += f"<div style='margin-bottom:8px;'>{it['content']}{p_str}</div>"
+            if f_note:
+                xls_hr += f"<tr><td style='vertical-align: top; {font_css}'>{cat_html}</td><td style='vertical-align: top; {font_css}' colspan='3'><span style='color:#0066cc; font-weight:bold;'>[주간고정]</span><br><span style='color:#0066cc;'>{f_note}</span></td></tr>"
             
-            cat_prog = int(sum(it['prog'] for it in items) / len(items)) if items else 100
-            xls_hr += f"<tr><td style='vertical-align: top; {font_css}'>{cat_html}</td><td style='vertical-align: top; {font_css}'>{content_html}</td><td style='text-align:center; vertical-align: top; {font_css}'><b>{cat_prog}%</b></td><td style='{font_css}'></td></tr>"
+            for it in items:
+                p_str = f" ({it['prog']}%)" if it['type'] in ['daily', 'issue'] else ""
+                cur_content = f"{it['content']}{p_str}"
+                
+                done_col = cur_content if it['prog'] == 100 else ""
+                next_col = cur_content if it['prog'] < 100 else ""
+                
+                xls_hr += f"<tr><td style='vertical-align: middle; text-align:center; {font_css}'>{cat_html}</td><td style='vertical-align: middle; {font_css}'>{done_col}</td><td style='text-align:center; vertical-align: middle; {font_css}'><b>{it['prog']}%</b></td><td style='vertical-align: middle; {font_css}'>{next_col}</td></tr>"
             
-        th = f"<tr><th style='background:#e0f7fa; padding:8px; width:15%; {font_css}'>업무분류</th><th style='background:#e0f7fa; padding:8px; width:50%; {font_css}'>지난주진행업무 ({s_w_str} ~ {e_w_str})</th><th style='background:#e0f7fa; padding:8px; width:10%; {font_css}'>진행률</th><th style='background:#e0f7fa; padding:8px; width:25%; {font_css}'>금주예정업무</th></tr>"
+        th = f"<tr><th style='background:#e0f7fa; padding:8px; width:15%; {font_css}'>업무분류</th><th style='background:#e0f7fa; padding:8px; width:45%; {font_css}'>지난주진행업무 ({s_w_str} ~ {e_w_str})</th><th style='background:#e0f7fa; padding:8px; width:10%; {font_css}'>진행률</th><th style='background:#e0f7fa; padding:8px; width:30%; {font_css}'>금주예정업무</th></tr>"
         xls_html = f"<html><head><meta charset='utf-8'></head><body><h2 style='text-align:center; {font_css}'>◎경영지원부 주간 보고◎</h2><table border='1' style='border-collapse:collapse; width:100%; border: 1px solid #ccc;'>{th}{xls_hr}</table></body></html>"
         
         st.download_button("💾 주간 보고서 (Excel) 다운로드", xls_html.encode('utf-8-sig'), f"[주간보고]경영지원부_{s_w}_{e_w}.xls")
