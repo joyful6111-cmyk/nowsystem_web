@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V46", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V48", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -62,7 +62,6 @@ if 'active_proj_id' not in st.session_state: st.session_state['active_proj_id'] 
 if 'edit_d_id' not in st.session_state: st.session_state['edit_d_id'] = None
 if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
 if 'edit_kpi_id' not in st.session_state: st.session_state['edit_kpi_id'] = None
-# 💡 상세 지표 수정을 위한 세션 키 추가
 if 'edit_detail_id' not in st.session_state: st.session_state['edit_detail_id'] = None
 
 def check_login(user_id, user_pw):
@@ -501,9 +500,18 @@ if u_role == "마스터":
                 apply_changes()
 
 # ==========================================
-# 탭 4: 전면 개편된 독립형 KPI 시스템 (상세 수정 기능 완벽 보강)
+# 탭 4: 전면 개편된 독립형 KPI 시스템 (단위 표기 기능 추가)
 # ==========================================
 with tab_kpi:
+    
+    # 💡 [요청사항 반영] 선택한 단위(unit)에 맞게 텍스트 포맷팅을 해주는 함수
+    def format_target(val, unit):
+        try: v = int(val)
+        except: v = val
+        if unit == "금액": return f"{v:,}원"
+        elif unit == "요율": return f"{v}%"
+        else: return f"{v}건"
+
     def calculate_kpi_score(target, submissions):
         t_id = target.get('id')
         t_name = target.get('kpi_name', '')
@@ -568,8 +576,17 @@ with tab_kpi:
                 all_users = sorted(list(set([u.get('이름') for u in user_data if u.get('이름')])))
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
-                sc3, sc4, sc5 = st.columns([1, 1, 1.5])
-                t_count = sc3.number_input("전체 대상 (건수/일수/금액)", min_value=0, value=14)
+                # 💡 [요청사항 반영] 목표 단위 선택 및 입력 폼 분리
+                sc3_u, sc3_v, sc4, sc5 = st.columns([1, 1.5, 1, 1.5])
+                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율", "금액"])
+                
+                if t_unit == "금액":
+                    t_count = sc3_v.number_input("목표 수치 (단위: 원)", min_value=0, value=0, step=100000)
+                elif t_unit == "요율":
+                    t_count = sc3_v.number_input("목표 수치 (단위: %)", min_value=0, value=100, step=5)
+                else:
+                    t_count = sc3_v.number_input("목표 수치 (단위: 건)", min_value=0, value=14, step=1)
+                
                 t_weight = sc4.number_input("배점", value=15)
                 t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
                 t_desc = st.text_area("산출식 및 배점 설명 (예: 누락 0건 15점)")
@@ -577,7 +594,7 @@ with tab_kpi:
                 if st.form_submit_button("➕ 메인 KPI 생성", type="primary") and t_name:
                     supabase.table('kpi_targets').insert({
                         "kpi_name": t_name, "owner": t_owner, "target_count": t_count, 
-                        "weight": t_weight, "cycle": t_cycle, "description": t_desc
+                        "unit": t_unit, "weight": t_weight, "cycle": t_cycle, "description": t_desc
                     }).execute(); apply_changes()
             
             st.divider()
@@ -585,33 +602,43 @@ with tab_kpi:
             if not kpi_targets: st.info("등록된 지표가 없습니다.")
             for i, target in enumerate(kpi_targets):
                 t_id = target.get('id')
-                # 💡 메인 지표 수정 폼
                 if str(st.session_state.get('edit_kpi_id')) == str(t_id):
                     with st.container(border=True):
                         ec1, ec2 = st.columns(2)
                         e_name = ec1.text_input("KPI명", value=target.get('kpi_name'), key=f"ekn_{t_id}_{i}")
                         cur_own = target.get('owner')
                         e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
-                        ec3, ec4, ec5 = st.columns([1, 1, 1.5])
-                        e_cnt = ec3.number_input("전체 대상 (건/일/금액)", value=int(target.get('target_count') or 1), key=f"ekc_{t_id}_{i}")
+                        
+                        ec3_u, ec3_v, ec4, ec5 = st.columns([1, 1.5, 1, 1.5])
+                        cur_unit = target.get('unit', '건수')
+                        unit_opts = ["건수", "요율", "금액"]
+                        e_unit = ec3_u.selectbox("목표 단위", unit_opts, index=unit_opts.index(cur_unit) if cur_unit in unit_opts else 0, key=f"eku_{t_id}_{i}")
+                        
+                        if e_unit == "금액": e_cnt = ec3_v.number_input("목표 수치 (원)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
+                        elif e_unit == "요율": e_cnt = ec3_v.number_input("목표 수치 (%)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
+                        else: e_cnt = ec3_v.number_input("목표 수치 (건)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
+                        
                         e_wgt = ec4.number_input("배점", value=int(target.get('weight') or 0), key=f"ekw_{t_id}_{i}")
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
                         e_desc = st.text_area("산출식", value=target.get('description') or '', key=f"ekd_{t_id}_{i}")
                         eb1, eb2, _ = st.columns([1, 1, 4])
                         if eb1.button("💾 메인 지표 저장", type="primary", key=f"esvk_{t_id}_{i}"):
-                            supabase.table('kpi_targets').update({"kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "weight": e_wgt, "cycle": e_cyc, "description": e_desc}).eq('id', t_id).execute()
+                            supabase.table('kpi_targets').update({
+                                "kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "unit": e_unit,
+                                "weight": e_wgt, "cycle": e_cyc, "description": e_desc
+                            }).eq('id', t_id).execute()
                             st.session_state['edit_kpi_id'] = None; apply_changes()
                         if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
                             st.session_state['edit_kpi_id'] = None; st.rerun()
                 else:
-                    with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표: {target.get('target_count')} / 배점: {target.get('weight')}점)"):
-                        st.write(f"ℹ️ {target.get('description')}")
+                    t_str_format = format_target(target.get('target_count', 0), target.get('unit', '건수'))
+                    with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표: {t_str_format} / 배점: {target.get('weight')}점)"):
+                        st.info(f"**📝 산출식 및 가이드:** {target.get('description', '설명글이 없습니다.')}")
                         st.markdown("**🔹 상세 업무(Sub-KPI) 할당 및 리스트**")
                         
                         details_for_this = [d for d in kpi_details if str(d.get('kpi_id')) == str(t_id)]
                         for d in details_for_this:
                             d_id = d.get('id')
-                            # 💡 [요청사항 반영] 상세 지표 개별 수정 폼
                             if str(st.session_state.get('edit_detail_id')) == str(d_id):
                                 with st.container(border=True):
                                     edc1, edc2, edc3 = st.columns([4, 2, 2])
@@ -619,7 +646,6 @@ with tab_kpi:
                                     ed_assig = edc2.selectbox("담당자", all_users, index=all_users.index(d.get('assignee')) if d.get('assignee') in all_users else 0, key=f"eda_{d_id}")
                                     ed_cycle = edc3.text_input("주기", value=d.get('cycle') or '', key=f"edc_{d_id}")
                                     ed_desc = st.text_area("상세 설명", value=d.get('description') or '', key=f"edd_{d_id}")
-                                    
                                     edb1, edb2, _ = st.columns([1, 1, 4])
                                     if edb1.button("💾 상세 저장", type="primary", key=f"edsave_{d_id}"):
                                         supabase.table('kpi_details').update({"detail_name": ed_name, "assignee": ed_assig, "cycle": ed_cycle, "description": ed_desc}).eq('id', d_id).execute()
@@ -654,7 +680,7 @@ with tab_kpi:
                         
                         st.markdown("---")
                         b1, b2, _ = st.columns([1.5, 1.5, 5])
-                        if b1.button("✏ 메인 지표 전체수정", key=f"kedt_{t_id}_{i}"): st.session_state['edit_kpi_id'] = t_id; st.rerun()
+                        if b1.button("✏ 메인 지표 수정", key=f"kedt_{t_id}_{i}"): st.session_state['edit_kpi_id'] = t_id; st.rerun()
                         if b2.button("🗑 메인 지표 완전삭제", key=f"kdel_{t_id}_{i}"): supabase.table('kpi_targets').delete().eq('id', t_id).execute(); apply_changes()
 
     else:
@@ -667,14 +693,24 @@ with tab_kpi:
             st.info("할당된 KPI 지표가 없습니다.")
         else:
             all_my_targets = my_common + my_personal
-            cols = st.columns(len(all_my_targets) if len(all_my_targets) > 0 else 1)
-            for i, t in enumerate(all_my_targets):
+            for t in all_my_targets:
                 app, tot, pts, rate, mis = calculate_kpi_score(t, kpi_subs)
-                metric_label = f"[{t['owner']}] {t['kpi_name']}"
-                if "누락" in t['kpi_name'] or "법정" in t['kpi_name']:
-                    cols[i].metric(metric_label, f"{pts}점", f"누락 {mis}건 (부서 승인 {app}/{tot})", delta_color="inverse")
-                else:
-                    cols[i].metric(metric_label, f"{pts}점", f"달성률 {round(rate, 1)}% (내 승인 {app}/{tot})")
+                t_unit = t.get('unit', '건수')
+                t_format = format_target(tot, t_unit)
+                
+                with st.container(border=True):
+                    st.markdown(f"### [{t['owner']}] {t['kpi_name']}")
+                    st.info(f"**💡 산출식 및 설명:** {t.get('description', '설명글이 없습니다.')}")
+                    
+                    mc1, mc2, mc3 = st.columns(3)
+                    mc1.write(f"- **🎯 목표:** {t_format}")
+                    mc2.write(f"- **⏱️ 주기:** {t.get('cycle', '미지정')}")
+                    mc3.write(f"- **⭐️ 배점:** {t.get('weight', 0)}점")
+                    
+                    if "누락" in t['kpi_name'] or "법정" in t['kpi_name']:
+                        st.error(f"**📊 달성 현황:** 누락 {mis}건 (부서 총 {app}건 승인) ➔ **{pts}점 획득**")
+                    else:
+                        st.success(f"**📊 달성 현황:** 달성률 {round(rate, 1)}% (내 승인 {app}건) ➔ **{pts}점 획득**")
 
         st.divider()
         
@@ -686,7 +722,8 @@ with tab_kpi:
                         parent_t = next((t for t in kpi_targets if str(t['id']) == str(md['kpi_id'])), None)
                         p_name = parent_t['kpi_name'] if parent_t else "알수없음 지표"
                         st.markdown(f"**[{p_name}] ➔ {md.get('detail_name')}** (주기: {md.get('cycle', '미지정')})")
-                        st.info(md.get('description') or '등록된 설명글이 없습니다.')
+                        st.write(md.get('description') or '등록된 설명글이 없습니다.')
+                        st.markdown("---")
             
             st.subheader("📤 증빙 자료 확인 요청")
             submit_options = []
