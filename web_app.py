@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V44 (콜백 동기화 완료)", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V45", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -33,7 +33,7 @@ except Exception as e:
     st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 실시간 반영을 위해 캐시 제거됨
+# 💡 실시간 반영을 위해 캐시 완전 제거됨
 def load_db_data():
     try:
         daily = supabase.table('daily').select("*").execute().data or []
@@ -195,7 +195,7 @@ for s in sub_data:
     if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 💡 [핵심 버그픽스] 자동 동기화용 콜백 함수 세팅
+# 💡 [버그픽스 유지] 자동 동기화용 콜백 함수 세팅
 # ==========================================
 daily_to_sub = {}
 sub_to_daily = {}
@@ -312,7 +312,7 @@ with tabs[0]:
         if str(row.get('프로젝트연동')).upper() == "TRUE": c1.markdown(f"**[{row.get('분류')}]** <span style='color:#555;'>{str(row.get('연결프로젝트')).replace('::', ' > ')}</span>{carry_txt}{badge}", unsafe_allow_html=True)
         else: c1.markdown(f"**[{row.get('분류')}]** {str(row.get('업무명') or '').replace(chr(10), '<br>')}{carry_txt}{badge}", unsafe_allow_html=True)
         
-        # 💡 [콜백 동기화 적용] On_Change 기능으로 즉각 저장 및 동기화
+        # 💡 [콜백 적용 유지]
         cur_p = int(str(row.get('진행률') or '0')) if str(row.get('진행률') or '0').isdigit() else 0
         c2.slider("진행", 0, 100, cur_p, 10, key=f"ds_{r_id}", on_change=on_daily_slider_change, args=(r_id, d_date, t_str), label_visibility="collapsed", disabled=disable_edit)
             
@@ -370,7 +370,6 @@ with tabs[1]:
         pn = p.get("프로젝트명") or ""
         owner = f" ({p.get('담당자') or ''})" if u_role == "마스터" and target_user == "전체" else ""
         my_s_list = sub_dict.get(pn, [])
-        
         total_p = sum(int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0 for s in my_s_list)
         avg_p = int(total_p / len(my_s_list)) if len(my_s_list) > 0 else 0
         
@@ -416,7 +415,7 @@ with tabs[1]:
                 sl1, sl2, sl3, sl4, sl5, sl6, sl7 = st.columns([2.5, 2.0, 1.2, 1.4, 1.3, 0.9, 0.9])
                 sl1.markdown(f"· {str(s.get('세부업무명') or '').replace('\n','<br>')}", unsafe_allow_html=True)
                 
-                # 💡 [콜백 동기화 적용] 슬라이더 및 버튼에 콜백 부여
+                # 💡 [콜백 적용 유지]
                 cur_sp = int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0
                 sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s_id}", on_change=on_sub_slider_change, args=(s_id, r_id), label_visibility="collapsed", disabled=disable_edit)
                 sl3.button("✅완료", key=f"sdone_{s_id}", on_click=on_complete_button_click, args=(s_id, r_id), disabled=disable_edit)
@@ -501,7 +500,7 @@ if u_role == "마스터":
                 apply_changes()
 
 # ==========================================
-# 탭 4: 전면 개편된 독립형 KPI 시스템 (상세할당 포함)
+# 탭 4: 전면 개편된 독립형 KPI 시스템 (목표수치, 주기, 설명 추가 반영)
 # ==========================================
 with tab_kpi:
     def calculate_kpi_score(target, submissions):
@@ -552,7 +551,7 @@ with tab_kpi:
                     if d_info: t_name += f" ➔ 🔹{d_info['detail_name']}"
                     
                     with st.container(border=True):
-                        st.markdown(f"**제출자:** {p['user_name']} | **지표:** {t_name} | **기간:** {p['period']}")
+                        st.markdown(f"**제출자:** {p['user_name']} | **지표:** {t_name} | **제출 기간/분류:** {p['period']}")
                         st.write(f"**증빙 내역:** {p['evidence']}")
                         ac1, ac2, _ = st.columns([1, 1, 6])
                         if ac1.button("✅ 승인", key=f"app_{p['id']}"):
@@ -569,7 +568,8 @@ with tab_kpi:
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
                 sc3, sc4, sc5 = st.columns([1, 1, 1.5])
-                t_count = sc3.number_input("전체 대상 건수/일수", min_value=1, value=14)
+                # 💡 [요청사항 1] 목표 건수를 금액으로도 인지할 수 있도록 텍스트 수정
+                t_count = sc3.number_input("전체 대상 (건수/일수/금액)", min_value=0, value=14)
                 t_weight = sc4.number_input("배점", value=15)
                 t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
                 t_desc = st.text_area("산출식 및 배점 설명 (예: 누락 0건 15점)")
@@ -592,7 +592,7 @@ with tab_kpi:
                         cur_own = target.get('owner')
                         e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
                         ec3, ec4, ec5 = st.columns([1, 1, 1.5])
-                        e_cnt = ec3.number_input("대상 건수", value=int(target.get('target_count') or 1), key=f"ekc_{t_id}_{i}")
+                        e_cnt = ec3.number_input("전체 대상 (건/일/금액)", value=int(target.get('target_count') or 1), key=f"ekc_{t_id}_{i}")
                         e_wgt = ec4.number_input("배점", value=int(target.get('weight') or 0), key=f"ekw_{t_id}_{i}")
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
                         e_desc = st.text_area("산출식", value=target.get('description') or '', key=f"ekd_{t_id}_{i}")
@@ -603,25 +603,34 @@ with tab_kpi:
                         if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
                             st.session_state['edit_kpi_id'] = None; st.rerun()
                 else:
-                    with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표 {target.get('target_count')}건 / 배점 {target.get('weight')}점)"):
+                    with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표: {target.get('target_count')} / 배점: {target.get('weight')}점)"):
                         st.write(f"ℹ️ {target.get('description')}")
                         st.markdown("**🔹 상세 업무(Sub-KPI) 할당 및 리스트**")
                         
                         details_for_this = [d for d in kpi_details if str(d.get('kpi_id')) == str(t_id)]
                         for d in details_for_this:
-                            dc1, dc2, dc3 = st.columns([5, 3, 1])
-                            dc1.write(f"- {d.get('detail_name')}")
-                            dc2.write(f"👤 담당: {d.get('assignee')}")
-                            if dc3.button("삭제", key=f"del_det_{d.get('id')}"):
-                                supabase.table('kpi_details').delete().eq('id', d.get('id')).execute(); apply_changes()
+                            with st.container(border=True):
+                                dc1, dc2, dc3 = st.columns([5, 3, 1])
+                                dc1.write(f"**{d.get('detail_name')}** (주기: {d.get('cycle', '미지정')})")
+                                dc1.caption(f"설명: {d.get('description', '')}")
+                                dc2.write(f"👤 담당: {d.get('assignee')}")
+                                if dc3.button("삭제", key=f"del_det_{d.get('id')}"):
+                                    supabase.table('kpi_details').delete().eq('id', d.get('id')).execute(); apply_changes()
                         
+                        # 💡 [요청사항 2] 상세 업무 등록 시 주기 및 설명글 추가 폼
                         with st.form(key=f"add_det_{t_id}", clear_on_submit=True):
-                            c_n, c_a, c_b = st.columns([5, 3, 2])
-                            new_d_name = c_n.text_input("상세 업무명", label_visibility="collapsed", placeholder="추가할 상세 업무명")
-                            new_d_assig = c_a.selectbox("담당자", all_users, label_visibility="collapsed")
-                            if c_b.form_submit_button("상세 할당"):
+                            st.markdown("**새로운 상세 업무 할당**")
+                            c_n, c_a, c_c = st.columns([4, 2, 2])
+                            new_d_name = c_n.text_input("상세 업무명", placeholder="예: 1분기 건강검진안내")
+                            new_d_assig = c_a.selectbox("담당자", all_users)
+                            new_d_cycle = c_c.text_input("주기", placeholder="예: 매월, 1분기")
+                            new_d_desc = st.text_area("상세 설명 (가이드)", placeholder="담당자가 참고할 설명글을 적어주세요.")
+                            if st.form_submit_button("상세 할당"):
                                 if new_d_name:
-                                    supabase.table('kpi_details').insert({"kpi_id": t_id, "detail_name": new_d_name, "assignee": new_d_assig}).execute()
+                                    supabase.table('kpi_details').insert({
+                                        "kpi_id": t_id, "detail_name": new_d_name, "assignee": new_d_assig,
+                                        "cycle": new_d_cycle, "description": new_d_desc
+                                    }).execute()
                                     apply_changes()
                         
                         st.markdown("---")
@@ -644,20 +653,28 @@ with tab_kpi:
                 app, tot, pts, rate, mis = calculate_kpi_score(t, kpi_subs)
                 metric_label = f"[{t['owner']}] {t['kpi_name']}"
                 if "누락" in t['kpi_name'] or "법정" in t['kpi_name']:
-                    cols[i].metric(metric_label, f"{pts}점", f"누락 {mis}건 (부서 승인 {app}/{tot}건)", delta_color="inverse")
+                    cols[i].metric(metric_label, f"{pts}점", f"누락 {mis}건 (부서 승인 {app}/{tot})", delta_color="inverse")
                 else:
-                    cols[i].metric(metric_label, f"{pts}점", f"달성률 {round(rate, 1)}% (내 승인 {app}/{tot}건)")
+                    cols[i].metric(metric_label, f"{pts}점", f"달성률 {round(rate, 1)}% (내 승인 {app}/{tot})")
 
         st.divider()
         
+        # 💡 [요청사항 2] 실무자가 상세 할당된 업무의 주기와 설명을 볼 수 있도록 가이드 추가
         if not is_readonly:
-            st.subheader("📤 증빙 자료 확인 요청")
+            my_assigned_details = [d for d in kpi_details if d.get('assignee') == target_user]
+            if my_assigned_details:
+                with st.expander("💡 나에게 할당된 상세 지표 가이드 보기", expanded=False):
+                    for md in my_assigned_details:
+                        parent_t = next((t for t in kpi_targets if str(t['id']) == str(md['kpi_id'])), None)
+                        p_name = parent_t['kpi_name'] if parent_t else "알수없음 지표"
+                        st.markdown(f"**[{p_name}] ➔ {md.get('detail_name')}** (주기: {md.get('cycle', '미지정')})")
+                        st.info(md.get('description') or '등록된 설명글이 없습니다.')
             
+            st.subheader("📤 증빙 자료 확인 요청")
             submit_options = []
             for pt in my_personal:
                 submit_options.append({"type": "personal", "target": pt, "detail": None, "label": f"[개인] {pt['kpi_name']}"})
             
-            my_assigned_details = [d for d in kpi_details if d.get('assignee') == target_user]
             for md in my_assigned_details:
                 parent_t = next((t for t in kpi_targets if str(t['id']) == str(md['kpi_id'])), None)
                 if parent_t:
@@ -667,7 +684,7 @@ with tab_kpi:
                 s1, s2 = st.columns(2)
                 if submit_options:
                     sel_opt = s1.selectbox("할당된 지표 선택", submit_options, format_func=lambda x: x["label"])
-                    sub_period = s2.text_input("대상 기간/분류 (예: 1분기, 4월 15일 일계표)")
+                    sub_period = s2.text_input("실제 진행 분류/기간 (예: 1분기, 4월 15일 일계표)")
                     sub_evidence = st.text_area("증빙 내용 및 위치 (예: 그룹웨어 결재 번호 #1234)")
                     
                     if st.form_submit_button("확인 요청 전송", type="primary"):
