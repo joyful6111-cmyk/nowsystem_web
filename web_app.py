@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V51", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V52 (게시판 새창 UI 개편)", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -54,7 +54,7 @@ def load_db_data():
 def apply_changes():
     st.rerun()
 
-# --- [보안 및 로그인] ---
+# --- [보안 및 로그인 세션] ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 if 'active_proj_id' not in st.session_state: st.session_state['active_proj_id'] = None
@@ -63,6 +63,8 @@ if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
 if 'edit_kpi_id' not in st.session_state: st.session_state['edit_kpi_id'] = None
 if 'edit_detail_id' not in st.session_state: st.session_state['edit_detail_id'] = None
 if 'edit_board_id' not in st.session_state: st.session_state['edit_board_id'] = None
+# 💡 [신규] 넓은 화면 게시판 출력을 위한 세션
+if 'active_modal_board' not in st.session_state: st.session_state['active_modal_board'] = None
 
 def check_login(user_id, user_pw):
     _, _, _, _, users, _, _, _, _, _ = load_db_data()
@@ -122,49 +124,58 @@ def get_monday(date_obj):
     return date_obj - datetime.timedelta(days=date_obj.weekday())
 current_monday_str = get_monday(today_kst).strftime("%Y-%m-%d")
 
-# 공유 게시판 렌더링 헬퍼 함수
-def render_shared_board(board_type, title, is_weekly=False):
-    with st.expander(title, expanded=False):
-        boards = [b for b in shared_boards if b.get('board_type') == board_type]
-        if is_weekly:
-            boards = [b for b in boards if b.get('week_start') == current_monday_str]
+# 💡 [신규] 넓은 메인화면 출력용 게시판 렌더링 함수
+def render_shared_board_full_width(board_type, title, is_weekly=False):
+    c_back, _ = st.columns([2, 8])
+    if c_back.button("🔙 메인 화면으로 돌아가기", type="primary", use_container_width=True):
+        st.session_state['active_modal_board'] = None
+        st.rerun()
         
-        for b in boards:
-            b_id = b.get('id')
-            is_author = (b.get('author') == u_name)
-            
-            if str(st.session_state.get('edit_board_id')) == str(b_id) and is_author:
-                with st.container(border=True):
-                    e_content = st.text_area("내용 수정", value=b.get('content') or '', key=f"eb_{b_id}")
-                    eb1, eb2, _ = st.columns([1,1,4])
-                    if eb1.button("저장", key=f"ebs_{b_id}", type="primary"):
-                        supabase.table('shared_boards').update({"content": e_content}).eq('id', b_id).execute()
-                        st.session_state['edit_board_id'] = None; apply_changes()
-                    if eb2.button("취소", key=f"ebc_{b_id}"):
-                        st.session_state['edit_board_id'] = None; st.rerun()
-            else:
-                with st.container(border=True):
-                    sc1, sc2 = st.columns([4, 1.5])
-                    status_badge = "✅ 완료" if b.get('status') == '완료' else "▶ 진행중"
-                    sc1.markdown(f"**👤 {b.get('author')}** | {status_badge}")
-                    sc1.write(b.get('content'))
-                    
-                    if is_author:
-                        b1, b2, b3 = sc2.columns(3)
-                        if b.get('status') != '완료' and b1.button("완료", key=f"bd_{b_id}"):
-                            supabase.table('shared_boards').update({"status": "완료"}).eq('id', b_id).execute(); apply_changes()
-                        if b2.button("수정", key=f"be_{b_id}"):
-                            st.session_state['edit_board_id'] = b_id; st.rerun()
-                        if b3.button("삭제", key=f"bx_{b_id}"):
-                            supabase.table('shared_boards').delete().eq('id', b_id).execute(); apply_changes()
+    st.header(title)
+    st.divider()
+    
+    boards = [b for b in shared_boards if b.get('board_type') == board_type]
+    if is_weekly:
+        boards = [b for b in boards if b.get('week_start') == current_monday_str]
+    
+    for b in boards:
+        b_id = b.get('id')
+        is_author = (b.get('author') == u_name)
+        
+        if str(st.session_state.get('edit_board_id')) == str(b_id) and is_author:
+            with st.container(border=True):
+                e_content = st.text_area("내용 수정", value=b.get('content') or '', key=f"eb_{b_id}", height=120)
+                eb1, eb2, _ = st.columns([1, 1, 8])
+                if eb1.button("저장", key=f"ebs_{b_id}", type="primary"):
+                    supabase.table('shared_boards').update({"content": e_content}).eq('id', b_id).execute()
+                    st.session_state['edit_board_id'] = None; apply_changes()
+                if eb2.button("취소", key=f"ebc_{b_id}"):
+                    st.session_state['edit_board_id'] = None; st.rerun()
+        else:
+            with st.container(border=True):
+                # 가독성을 위해 넓게 배치 [내용 8 : 버튼 2]
+                sc1, sc2 = st.columns([8, 2])
+                status_badge = "✅ 완료" if b.get('status') == '완료' else "▶ 진행중"
+                sc1.markdown(f"**👤 {b.get('author')}** | {status_badge}")
+                sc1.write(b.get('content'))
+                
+                if is_author:
+                    b1, b2, b3 = sc2.columns(3)
+                    if b.get('status') != '완료' and b1.button("✅완료", key=f"bd_{b_id}"):
+                        supabase.table('shared_boards').update({"status": "완료"}).eq('id', b_id).execute(); apply_changes()
+                    if b2.button("✏️수정", key=f"be_{b_id}"):
+                        st.session_state['edit_board_id'] = b_id; st.rerun()
+                    if b3.button("🗑️삭제", key=f"bx_{b_id}"):
+                        supabase.table('shared_boards').delete().eq('id', b_id).execute(); apply_changes()
 
-        with st.form(f"form_{board_type}", clear_on_submit=True):
-            new_content = st.text_area("새 내용 작성", placeholder="내용을 입력하세요", key=f"new_content_{board_type}")
-            if st.form_submit_button("등록", type="primary") and new_content:
-                supabase.table('shared_boards').insert({
-                    "board_type": board_type, "content": new_content, "author": u_name, 
-                    "status": "진행중", "week_start": current_monday_str
-                }).execute(); apply_changes()
+    st.subheader("📝 새 내용 작성")
+    with st.form(f"form_{board_type}", clear_on_submit=True):
+        new_content = st.text_area("내용을 상세히 입력하세요", height=150, key=f"new_content_{board_type}")
+        if st.form_submit_button("게시물 등록", type="primary") and new_content:
+            supabase.table('shared_boards').insert({
+                "board_type": board_type, "content": new_content, "author": u_name, 
+                "status": "진행중", "week_start": current_monday_str
+            }).execute(); apply_changes()
 
 # --- [사이드바 & 타겟 유저 결정] ---
 with st.sidebar:
@@ -202,18 +213,38 @@ with st.sidebar:
         if st.button("🔒 일과 마감하기", use_container_width=True, type="primary"): st.session_state[lock_key] = True; st.rerun()
   
     st.divider()
-    render_shared_board('요청사항', "📬 타 부서 요청 사항 (공용)")
-    render_shared_board('세금계산서', "💰 금주 세금계산서 현황 (매주 리셋)", is_weekly=True)
-    render_shared_board('분납서', "📄 금주 분납서 이슈 현황 (매주 리셋)", is_weekly=True)
-    render_shared_board('보증보험', "🛡️ 금주 보증보험 이슈 현황 (매주 리셋)", is_weekly=True)
-    render_shared_board('서버위치', "💾 서버 저장 위치 정보 (공용)")
+    # 💡 [변경] 사이드바에서는 오직 '버튼'만 제공하여 클릭 시 메인 화면으로 전환
+    st.markdown("**📂 부서 공용 게시판**")
+    if st.button("📬 타 부서 요청 사항", use_container_width=True):
+        st.session_state['active_modal_board'] = ('요청사항', "📬 타 부서 요청 사항 (공용)", False)
+        st.rerun()
+    if st.button("💰 금주 세금계산서 현황", use_container_width=True):
+        st.session_state['active_modal_board'] = ('세금계산서', "💰 금주 세금계산서 현황 (매주 리셋)", True)
+        st.rerun()
+    if st.button("📄 금주 분납서 이슈 현황", use_container_width=True):
+        st.session_state['active_modal_board'] = ('분납서', "📄 금주 분납서 이슈 현황 (매주 리셋)", True)
+        st.rerun()
+    if st.button("🛡️ 금주 보증보험 이슈 현황", use_container_width=True):
+        st.session_state['active_modal_board'] = ('보증보험', "🛡️ 금주 보증보험 이슈 현황 (매주 리셋)", True)
+        st.rerun()
+    if st.button("💾 서버 저장 위치 정보", use_container_width=True):
+        st.session_state['active_modal_board'] = ('서버위치', "💾 서버 저장 위치 정보 (공용)", False)
+        st.rerun()
     
     st.divider()
     if st.button("🚪 로그아웃", use_container_width=True): 
         try: cookie_controller.remove('now_id'); cookie_controller.remove('now_pw')
         except Exception: pass
         st.session_state['logged_in'] = False; st.rerun()
-  
+
+# 💡 [핵심] 사이드바 게시판 버튼이 눌렸을 때 메인 화면 전체를 덮어쓰는 로직
+if st.session_state.get('active_modal_board'):
+    b_type, b_title, b_weekly = st.session_state['active_modal_board']
+    render_shared_board_full_width(b_type, b_title, b_weekly)
+    st.stop() # st.stop()을 호출하여 하단의 일과/프로젝트/KPI 탭 렌더링을 차단하고 게시판만 보여줍니다.
+
+# ----------------------------------------------------------------------
+# 아래부터는 메인 화면 (게시판이 꺼져 있을 때만 보임)
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
 
 def is_task_visible(d, target_date_str):
@@ -441,7 +472,6 @@ with tabs[1]:
                 if not disable_edit: supabase.table('projects').update({"보고서제외": not p_ex}).eq('id', r_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
             if not is_readonly:
                 with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
-                    # 💡 [버그 픽스] 누락되었던 컬럼 생성 코드 복구
                     sc1, sc2 = st.columns([4,1])
                     new_sub = sc1.text_area("세부 업무 추가", height=80, disabled=disable_edit, key=f"new_sub_{r_id}")
                     if sc2.form_submit_button("추가", disabled=disable_edit) and new_sub:
@@ -624,7 +654,7 @@ with tab_kpi:
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
                 sc3_u, sc3_v, sc4, sc5 = st.columns([1, 1.5, 1, 1.5])
-                t_unit = sc3_u.selectbox("목표 단위", ["건", "요율(%)", "금액(원)"])
+                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율(%)", "금액(원)"])
                 if t_unit == "금액(원)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=0, step=100000)
                 elif t_unit == "요율(%)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=100, step=5)
                 else: t_count = sc3_v.number_input("목표 수치", min_value=0, value=14, step=1)
@@ -651,8 +681,8 @@ with tab_kpi:
                         cur_own = target.get('owner')
                         e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
                         ec3_u, ec3_v, ec4, ec5 = st.columns([1, 1.5, 1, 1.5])
-                        cur_unit = target.get('unit', '건')
-                        unit_opts = ["건", "요율(%)", "금액(원)"]
+                        cur_unit = target.get('unit', '건수')
+                        unit_opts = ["건수", "요율(%)", "금액(원)"]
                         e_unit = ec3_u.selectbox("목표 단위", unit_opts, index=unit_opts.index(cur_unit) if cur_unit in unit_opts else 0, key=f"eku_{t_id}_{i}")
                         
                         if e_unit == "금액(원)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
@@ -663,13 +693,16 @@ with tab_kpi:
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
                         e_desc = st.text_area("산출식", value=target.get('description') or '', key=f"ekd_{t_id}_{i}")
                         eb1, eb2, _ = st.columns([1, 1, 4])
-                        if eb1.button("💾 메인 지표 저장", type="primary", key=f"esvk_{t_id}_{i}"):
-                            supabase.table('kpi_targets').update({"kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "unit": e_unit, "weight": e_wgt, "cycle": e_cyc, "description": e_desc}).eq('id', t_id).execute()
+                        if eb1.button("💾 저장", type="primary", key=f"esvk_{t_id}_{i}"):
+                            supabase.table('kpi_targets').update({
+                                "kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "unit": e_unit,
+                                "weight": e_wgt, "cycle": e_cyc, "description": e_desc
+                            }).eq('id', t_id).execute()
                             st.session_state['edit_kpi_id'] = None; apply_changes()
                         if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
                             st.session_state['edit_kpi_id'] = None; st.rerun()
                 else:
-                    t_str_format = format_target(target.get('target_count', 0), target.get('unit', '건'))
+                    t_str_format = format_target(target.get('target_count', 0), target.get('unit', '건수'))
                     with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표: {t_str_format} / 배점: {target.get('weight')}점)"):
                         st.info(f"**📝 산출식 및 가이드:** {target.get('description', '설명글이 없습니다.')}")
                         st.markdown("**🔹 상세 업무(Sub-KPI) 할당 및 리스트**")
@@ -696,8 +729,10 @@ with tab_kpi:
                                     dc1.write(f"**{d.get('detail_name')}** (주기: {d.get('cycle', '미지정')})")
                                     dc1.caption(f"설명: {d.get('description', '')}")
                                     dc2.write(f"👤 담당: {d.get('assignee')}")
-                                    if dc3.button("✏️ 수정", key=f"edit_det_{d_id}"): st.session_state['edit_detail_id'] = d_id; st.rerun()
-                                    if dc4.button("🗑 삭제", key=f"del_det_{d_id}"): supabase.table('kpi_details').delete().eq('id', d_id).execute(); apply_changes()
+                                    if dc3.button("✏️ 수정", key=f"edit_det_{d_id}"):
+                                        st.session_state['edit_detail_id'] = d_id; st.rerun()
+                                    if dc4.button("🗑 삭제", key=f"del_det_{d_id}"):
+                                        supabase.table('kpi_details').delete().eq('id', d_id).execute(); apply_changes()
                         
                         with st.form(key=f"add_det_{t_id}", clear_on_submit=True):
                             st.markdown("**새로운 상세 업무 할당**")
@@ -810,7 +845,7 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 데이터/보고서 전용
+# 탭 5: 데이터/보고서 
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
