@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V54 (대시보드 가독성 개편)", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V55", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -561,7 +561,7 @@ if u_role == "마스터":
         with c1:
             st.subheader("계정 관리")
             u_df = pd.DataFrame(user_data)
-            e_u_df = st.data_editor(u_df, num_rows="dynamic", use_container_width=True)
+            e_u_df = st.data_editor(u_df, num_rows="dynamic", use_container_width=True, key="admin_user_editor")
             if st.button("계정 정보 저장"):
                 orig_u_ids = set(u_df['id'].dropna()) if 'id' in u_df.columns else set()
                 new_u_ids = set(e_u_df['id'].dropna()) if 'id' in e_u_df.columns else set()
@@ -573,7 +573,7 @@ if u_role == "마스터":
         with c2:
             st.subheader("업무 분류 관리")
             c_df = pd.DataFrame(cat_data)
-            e_c_df = st.data_editor(c_df, num_rows="dynamic", use_container_width=True)
+            e_c_df = st.data_editor(c_df, num_rows="dynamic", use_container_width=True, key="admin_cat_editor")
             if st.button("분류 목록 저장", type="primary"):
                 orig_c_ids = set(c_df['id'].dropna()) if 'id' in c_df.columns else set()
                 new_c_ids = set(e_c_df['id'].dropna()) if 'id' in e_c_df.columns else set()
@@ -768,7 +768,6 @@ with tab_kpi:
         if not my_common and not my_personal:
             st.info("할당된 KPI 지표가 없습니다.")
         else:
-            # 💡 [가독성 개편] 3열 그리드 레이아웃 적용
             all_my_targets = my_common + my_personal
             num_cols = 3
             rows = [all_my_targets[i:i + num_cols] for i in range(0, len(all_my_targets), num_cols)]
@@ -782,7 +781,6 @@ with tab_kpi:
                     
                     with cols[j].container(border=True):
                         st.markdown(f"**[{t['owner']}] {t['kpi_name']}**")
-                        # 진행률 프로그레스 바
                         st.progress(min(int(rate), 100))
                         
                         if "누락" in t['kpi_name'] or "법정" in t['kpi_name']:
@@ -952,6 +950,8 @@ with tab_rep:
         s_w_str, e_w_str = s_w.strftime("%Y-%m-%d"), e_w.strftime("%Y-%m-%d")
         
         st.markdown("**📝 업무 분류별 주간 고정 내용 관리** (엑셀 출력용)")
+        st.info("입력된 내용은 이번 엑셀 파일에만 포함되며, 데이터베이스에 영구 저장되지 않습니다.")
+        
         excel_sort_order = ["경영", "재무", "입찰", "조달", "지원", "R&D", "현장", "요청사항"]
         
         with st.expander("고정 내용 입력 열기"):
@@ -962,7 +962,6 @@ with tab_rep:
                 
                 with st.container(border=True):
                     f_col1, f_col2 = st.columns([8, 2])
-                    # 💡 [요청사항 수정] 라벨 숨김 옵션 삭제 -> 텍스트 명시 표출로 가독성 개선
                     f_input = f_col1.text_area(f"📌 [{cat}] 업무 고정 내용", value=f_text, key=f"f_input_{cat}", height=68)
                     
                     fb1, fb2 = f_col2.columns(2)
