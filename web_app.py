@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V38", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V40", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -33,7 +33,7 @@ except Exception as e:
     st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 데이터 로드
+# 💡 데이터 로드 (KPI 신규 테이블 포함)
 @st.cache_data(ttl=30)
 def load_db_data():
     try:
@@ -41,13 +41,17 @@ def load_db_data():
         projects = supabase.table('projects').select("*").execute().data or []
         sub_tasks = supabase.table('sub_tasks').select("*").execute().data or []
         routines = supabase.table('routines').select("*").execute().data or []
-        settings = supabase.table('settings').select("*").execute().data or []
         users = supabase.table('users').select("*").execute().data or []
         categories = supabase.table('categories').select("*").execute().data or []
-        return daily, projects, sub_tasks, routines, settings, users, categories
+        
+        # 신규 독립형 KPI 테이블 로드
+        kpi_targets = supabase.table('kpi_targets').select("*").execute().data or []
+        kpi_submissions = supabase.table('kpi_submissions').select("*").execute().data or []
+        
+        return daily, projects, sub_tasks, routines, users, categories, kpi_targets, kpi_submissions
     except Exception as e:
         st.warning(f"데이터 로드 실패: {e}")
-        return [], [], [], [], [], [], []
+        return [], [], [], [], [], [], [], []
 
 def apply_changes():
     load_db_data.clear() 
@@ -59,9 +63,10 @@ if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 if 'active_proj_id' not in st.session_state: st.session_state['active_proj_id'] = None
 if 'edit_d_id' not in st.session_state: st.session_state['edit_d_id'] = None
 if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
+if 'edit_kpi_id' not in st.session_state: st.session_state['edit_kpi_id'] = None
 
 def check_login(user_id, user_pw):
-    _, _, _, _, _, users, _ = load_db_data()
+    _, _, _, _, users, _, _, _ = load_db_data()
     for u in users:
         if str(u.get('아이디') or '') == str(user_id) and str(u.get('비밀번호') or '') == str(user_pw):
             st.session_state['logged_in'] = True
@@ -100,7 +105,7 @@ u_name = u_info.get('이름') or '사용자'
 u_role = u_info.get('권한') or '일반'
 
 # --- [데이터 할당 및 정렬] ---
-all_daily, proj_data, sub_data, routine_data, kpi_config, user_data, cat_data = load_db_data()
+all_daily, proj_data, sub_data, routine_data, user_data, cat_data, kpi_targets, kpi_subs = load_db_data()
 
 proj_data = sorted(proj_data, key=lambda x: (int(x.get('정렬순서') or 999), int(x.get('id') or 0)))
 sub_data = sorted(sub_data, key=lambda x: int(x.get('id') or 0))
@@ -164,17 +169,7 @@ with st.sidebar:
         st.rerun()
   
 st.title("🚀 NOWSYSTEM 통합 업무 관리")
-  
-# 💡 KPI 이름표 부착 로직
-kpi_dict = {str(k.get('KPI명') or '').strip(): str(k.get('구분') or '공통').strip() for k in kpi_config if pd.notna(k.get('KPI명')) and str(k.get('KPI명') or '').strip() != ""}
-kpi_owner = target_user if target_user != "전체" else u_name
-my_kpi_opts = sorted(list(set([k for k, v in kpi_dict.items() if v in ['공통', kpi_owner]])))
-  
-def format_kpi(kpi_name):
-    if kpi_name == "기타": return "기타"
-    owner = kpi_dict.get(kpi_name, '공통')
-    return f"[{owner}] {kpi_name}"
-  
+
 def is_task_visible(d, target_date_str):
     d_id = str(d.get('id'))
     d_date = str(d.get('날짜') or '')
@@ -189,7 +184,7 @@ def is_task_visible(d, target_date_str):
 filtered_daily = [d for d in all_daily if (target_user == "전체" or d.get('담당자') == target_user) and is_task_visible(d, t_str)]
   
 if u_role == "마스터":
-    tab_list = ["📝 전사 일과 관리", "📁 전사 프로젝트", "⚙ 설정1 (KPI/계정)", "⚙ 설정2 (업무분류)", "📈 전사 통합 KPI", "📊 데이터/보고서"] if target_user == "전체" else [f"📝 {target_user} 일과", f"📁 {target_user} 프로젝트", "⚙ 설정1 (KPI/계정)", "⚙ 설정2 (업무분류)", f"📈 {target_user} KPI", "📊 데이터/보고서"]
+    tab_list = ["📝 전사 일과 관리", "📁 전사 프로젝트", "⚙ 설정 (계정)", "⚙ 설정 (업무분류)", "📈 통합 KPI 관리", "📊 데이터/보고서"] if target_user == "전체" else [f"📝 {target_user} 일과", f"📁 {target_user} 프로젝트", "⚙ 설정 (계정)", "⚙ 설정 (업무분류)", f"📈 {target_user} KPI", "📊 데이터/보고서"]
     tabs = st.tabs(tab_list)
     tab_set1, tab_set2, tab_kpi, tab_rep = tabs[2], tabs[3], tabs[4], tabs[5]
 else:
@@ -202,7 +197,7 @@ for s in sub_data:
     if pn in sub_dict: sub_dict[pn].append(s)
   
 # ==========================================
-# 탭 1: 일과 관리
+# 탭 1: 일과 관리 (KPI 선택 삭제)
 # ==========================================
 with tabs[0]:
     st.header(f"📝 {t_str} {target_user} 업무 리스트" if target_user != "전체" else f"📝 {t_str} 전사 업무 리스트")
@@ -214,13 +209,11 @@ with tabs[0]:
                     my_routines = [r.get('업무명') for r in routine_data if r.get('담당자') == target_user]
                     sel_opt = st.selectbox("업무명", ["✏ 직접 입력"] + my_routines, disabled=disable_edit)
                     n_task = st.text_area("내용 (Alt+Enter: 줄바꿈)", height=100, disabled=disable_edit)
-                    c1, c2 = st.columns(2)
-                    n_cat = c1.selectbox("분류", cat_list, disabled=disable_edit)
-                    n_kpi = c2.selectbox("KPI", my_kpi_opts + ["기타"], format_func=format_kpi, disabled=disable_edit)
+                    n_cat = st.selectbox("분류", cat_list, disabled=disable_edit)
                     if st.form_submit_button("추가", type="primary", disabled=disable_edit):
                         final_task = n_task if sel_opt == "✏ 직접 입력" else sel_opt
                         if final_task:
-                            supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "KPI": n_kpi, "담당자": target_user, "보고서제외": False, "진행중": False}).execute()
+                            supabase.table('daily').insert({"날짜": t_str, "업무명": final_task, "진행률": 0, "프로젝트연동": "FALSE", "분류": n_cat, "담당자": target_user, "보고서제외": False, "진행중": False}).execute()
                             apply_changes()
             else:
                 p_filter = [p.get('프로젝트명') for p in proj_data if (target_user == "전체" or p.get('담당자') == target_user) and str(p.get('시작일') or '') <= t_str and not (str(p.get('보관함이동') or 'FALSE').upper() == "TRUE")]
@@ -230,7 +223,7 @@ with tabs[0]:
                 if st.button("업무 가져오기", type="primary", disabled=disable_edit):
                     if sel_p and sel_s:
                         p_inf = next((p for p in proj_data if p.get('프로젝트명') == sel_p), {})
-                        supabase.table('daily').insert({"날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", "분류": p_inf.get('분류', '프로젝트'), "연결프로젝트": f"{sel_p}::{sel_s}", "KPI": p_inf.get('KPI', '기타'), "담당자": p_inf.get('담당자', target_user), "보고서제외": False, "진행중": False}).execute()
+                        supabase.table('daily').insert({"날짜": t_str, "업무명": sel_s, "진행률": 0, "프로젝트연동": "TRUE", "분류": p_inf.get('분류', '프로젝트'), "연결프로젝트": f"{sel_p}::{sel_s}", "담당자": p_inf.get('담당자', target_user), "보고서제외": False, "진행중": False}).execute()
                         apply_changes()
   
     st.divider()
@@ -240,9 +233,7 @@ with tabs[0]:
         if not is_readonly and str(st.session_state.get('edit_d_id')) == str(r_id):
             with st.container(border=True):
                 e_name = st.text_area("업무명 수정", row.get('업무명') or '', height=80)
-                ec1, ec2 = st.columns(2)
-                e_cat = ec1.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0)
-                e_kpi = ec2.selectbox("KPI", my_kpi_opts + ["기타"], format_func=format_kpi, index=(my_kpi_opts + ["기타"]).index(row.get('KPI')) if row.get('KPI') in (my_kpi_opts + ["기타"]) else 0)
+                e_cat = st.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0)
                 eb1, eb2, _ = st.columns([1, 1, 4])
                 
                 if eb1.button("저장", type="primary", key=f"esv_{r_id}"):
@@ -257,27 +248,26 @@ with tabs[0]:
                         if s_id_match: supabase.table('sub_tasks').update({"세부업무명": e_name}).eq('id', s_id_match).execute()
                             
                         p_id_match = next((p.get('id') for p in proj_data if p.get('프로젝트명') == p_n), None)
-                        if p_id_match: supabase.table('projects').update({"분류": e_cat, "KPI": e_kpi}).eq('id', p_id_match).execute()
+                        if p_id_match: supabase.table('projects').update({"분류": e_cat}).eq('id', p_id_match).execute()
                             
                         for d in all_daily:
                             if str(d.get('연결프로젝트') or '') == old_p_info:
-                                supabase.table('daily').update({"연결프로젝트": new_p_info, "업무명": e_name, "분류": e_cat, "KPI": e_kpi}).eq('id', d.get('id')).execute()
+                                supabase.table('daily').update({"연결프로젝트": new_p_info, "업무명": e_name, "분류": e_cat}).eq('id', d.get('id')).execute()
                     else:
-                        supabase.table('daily').update({"업무명": e_name, "분류": e_cat, "KPI": e_kpi}).eq('id', r_id).execute()
+                        supabase.table('daily').update({"업무명": e_name, "분류": e_cat}).eq('id', r_id).execute()
                         
                     st.session_state['edit_d_id'] = None; apply_changes()
                     
                 if eb2.button("취소", key=f"ecan_{r_id}"): st.session_state['edit_d_id'] = None; st.rerun()
             continue
             
-        # 💡 [수정 3] 컬럼 너비 조정 및 수정/삭제 텍스트 추가
         c1, c2, c3, c4, c5 = st.columns([3.5, 2.5, 1.2, 0.9, 0.9])
         d_date = str(row.get('날짜') or '')
         carry_txt = f" <small style='color:#E65100; font-weight:bold;'>[🔥이월: {d_date}]</small>" if d_date < t_str else ""
         badge = f" <small style='color:blue;'>[{row.get('담당자') or ''}]</small>" if target_user == "전체" else ""
         
         if str(row.get('프로젝트연동')).upper() == "TRUE": c1.markdown(f"**[{row.get('분류') or '프로젝트'}]** <span style='color:#555;'>{str(row.get('연결프로젝트')).replace('::', ' > ')}</span>{carry_txt}{badge}", unsafe_allow_html=True)
-        else: c1.markdown(f"**[{row.get('분류') or '기타'}]** {str(row.get('업무명') or '').replace(chr(10), '<br>')} <small>(KPI: {row.get('KPI') or '미지정'})</small>{carry_txt}{badge}", unsafe_allow_html=True)
+        else: c1.markdown(f"**[{row.get('분류') or '기타'}]** {str(row.get('업무명') or '').replace(chr(10), '<br>')}{carry_txt}{badge}", unsafe_allow_html=True)
         
         cur_p = int(str(row.get('진행률') or '0')) if str(row.get('진행률') or '0').isdigit() else 0
         new_p = c2.slider("진행", 0, 100, cur_p, 10, key=f"ds_{r_id}", label_visibility="collapsed", disabled=disable_edit)
@@ -288,12 +278,11 @@ with tabs[0]:
                 if str(r_id) not in st.session_state['finished_today']:
                     st.session_state['finished_today'].append(str(r_id))
             
-            # 💡 [진행률 동기화 최종수정] :: 기호를 기준으로 양쪽 단어를 완벽하게 분리하여 공백을 제거한 뒤 비교
             if str(row.get('프로젝트연동') or 'FALSE').upper() == "TRUE":
                 p_info = str(row.get('연결프로젝트') or '')
                 if "::" in p_info:
                     p_n, s_n = p_info.split("::", 1)
-                    p_n, s_n = p_n.strip(), s_n.strip() # 양옆 공백 완벽 제거
+                    p_n, s_n = p_n.strip(), s_n.strip()
                     
                     for s_item in sub_data:
                         db_p_n = str(s_item.get('프로젝트명') or '').strip()
@@ -308,7 +297,6 @@ with tabs[0]:
             if not disable_edit: supabase.table('daily').update({"보고서제외": not is_ex}).eq('id', r_id).execute(); apply_changes()
             
         if not is_readonly:
-            # 💡 버튼에 텍스트 추가
             if c4.button("✏수정", key=f"ded_{r_id}", disabled=disable_edit): st.session_state['edit_d_id'] = r_id; st.rerun()
             if c5.button("🗑삭제", key=f"ddl_{r_id}", disabled=disable_edit): supabase.table('daily').delete().eq('id', r_id).execute(); apply_changes()
   
@@ -320,10 +308,9 @@ with tabs[0]:
             with st.form("add_routine_form", clear_on_submit=True):
                 r_task = st.text_input("새 데일리 업무명 등록", disabled=disable_edit)
                 r_cat = st.selectbox("분류", cat_list, disabled=disable_edit) 
-                r_kpi = st.selectbox("연관 KPI", my_kpi_opts + ["기타"], format_func=format_kpi, disabled=disable_edit)
                 sub_r_btn = st.form_submit_button("루틴 추가", disabled=disable_edit)
                 if sub_r_btn and r_task:
-                    supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "KPI": r_kpi, "담당자": target_user}).execute(); apply_changes()
+                    supabase.table('routines').insert({"업무명": r_task, "분류": r_cat, "담당자": target_user}).execute(); apply_changes()
     with c_r2:
         for i, r in enumerate(routine_data):
             if (u_role == "마스터" and target_user == "전체") or r.get('담당자') == target_user:
@@ -335,7 +322,7 @@ with tabs[0]:
                     supabase.table('routines').delete().eq('id', r_id).execute(); apply_changes()
   
 # ==========================================
-# 탭 2: 프로젝트 관리 
+# 탭 2: 프로젝트 관리 (KPI 선택 삭제)
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
@@ -346,9 +333,8 @@ with tabs[1]:
                 p_name = pc1.text_input("프로젝트명", disabled=disable_edit)
                 p_cat = pc2.selectbox("분류", cat_list, disabled=disable_edit) 
                 p_start = pc1.date_input("시작일", disabled=disable_edit)
-                p_kpi = pc1.selectbox("연관 KPI", my_kpi_opts + ["기타"], format_func=format_kpi, disabled=disable_edit)
                 if st.form_submit_button("프로젝트 저장", type="primary", disabled=disable_edit) and p_name:
-                    supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "분류": p_cat, "KPI": p_kpi, "담당자": target_user, "정렬순서": 999, "보고서제외": False}).execute(); apply_changes()
+                    supabase.table('projects').insert({"프로젝트명": p_name, "시작일": str(p_start), "완료일": "", "분류": p_cat, "담당자": target_user, "정렬순서": 999, "보고서제외": False}).execute(); apply_changes()
   
     for i, p in enumerate(proj_data):
         r_id = p.get('id')
@@ -362,7 +348,7 @@ with tabs[1]:
         my_s_list = sub_dict.get(pn, [])
         total_p = sum(int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0 for s in my_s_list)
         avg_p = int(total_p / len(my_s_list)) if len(my_s_list) > 0 else 0
-        # 💡 [폴더 닫힘 방지] ID를 문자로 강제 통일하여 렌더링 시 폴더가 닫히는 현상 차단
+        
         is_expanded = (str(st.session_state.get('active_proj_id')) == str(r_id))
         with st.expander(f"📂 {pn} [{p.get('분류')}] - 📊 {avg_p}% {owner}", expanded=is_expanded):
             set_c1, set_c2, set_c3 = st.columns([1, 1, 1.5])
@@ -389,7 +375,6 @@ with tabs[1]:
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id')
                 
-                # 💡 [수정 1] 아이디 문자열 변환으로 수정 버튼 에러 해결
                 if not is_readonly and str(st.session_state.get('edit_s_id')) == str(s_id):
                     with st.container(border=True):
                         e_s_name = st.text_area("세부업무명 수정", s.get('세부업무명') or '', height=80)
@@ -397,17 +382,13 @@ with tabs[1]:
                         if eb1.button("저장", type="primary", key=f"esv_s_{s_id}"):
                             supabase.table('sub_tasks').update({"세부업무명": e_s_name}).eq('id', s_id).execute()
                             old_s_name = s.get('세부업무명') or ''
-                            
-                            # 💡 [수정 3] 프로젝트에서 하위업무 수정 시 당겨진 일일업무 이름 동시 업데이트
                             for d in all_daily:
                                 if str(d.get('연결프로젝트') or '') == f"{pn}::{old_s_name}":
                                     supabase.table('daily').update({"연결프로젝트": f"{pn}::{e_s_name}", "업무명": e_s_name}).eq('id', d.get('id')).execute()
-                                    
                             st.session_state['edit_s_id'] = None; st.session_state['active_proj_id'] = r_id; apply_changes()
                         if eb2.button("취소", key=f"ecan_s_{s_id}"): st.session_state['edit_s_id'] = None; st.session_state['active_proj_id'] = r_id; st.rerun()
                     continue
                 
-                # 💡 [수정 2] 컬럼 너비 조정 및 완료/진행중/출력제외/수정/삭제 텍스트 추가
                 sl1, sl2, sl3, sl4, sl5, sl6, sl7 = st.columns([2.5, 2.0, 1.2, 1.4, 1.3, 0.9, 0.9])
                 sl1.markdown(f"· {str(s.get('세부업무명') or '').replace('\n','<br>')}", unsafe_allow_html=True)
                 
@@ -416,11 +397,8 @@ with tabs[1]:
                 
                 if not disable_edit and sp != cur_sp:
                     supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s_id).execute()
-                    
-                    # 💡 [진행률 동기화 최종수정] 연결프로젝트 문자열을 분해하여 각각의 단어를 정확히 대조
                     target_p_n = str(pn).strip()
                     target_s_n = str(s.get('세부업무명') or '').strip()
-                    
                     for d in all_daily:
                         if str(d.get('프로젝트연동') or 'FALSE').upper() == "TRUE":
                             d_info = str(d.get('연결프로젝트') or '')
@@ -428,9 +406,7 @@ with tabs[1]:
                                 d_p_n, d_s_n = d_info.split("::", 1)
                                 if d_p_n.strip() == target_p_n and d_s_n.strip() == target_s_n:
                                     supabase.table('daily').update({"진행률": sp}).eq('id', d.get('id')).execute()
-                            
                     st.session_state['active_proj_id'] = str(r_id); apply_changes()
-               
                
                 if sl3.button("✅완료", key=f"sdone_{s_id}", disabled=disable_edit):
                     supabase.table('sub_tasks').update({"진행률": 100}).eq('id', s_id).execute()
@@ -450,7 +426,6 @@ with tabs[1]:
                     if not disable_edit: supabase.table('sub_tasks').update({"보고서제외": not s_ex}).eq('id', s_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
                 
                 if not is_readonly:
-                    # 💡 [버튼 먹통 해결] 저장하는 ID들을 모두 str()로 감싸서 문자열로 확정
                     if sl6.button("✏수정", key=f"sedt_{s_id}", disabled=disable_edit): st.session_state['edit_s_id'] = str(s_id); st.session_state['active_proj_id'] = str(r_id); st.rerun()
                     if sl7.button("🗑삭제", key=f"sdel_{s_id}", disabled=disable_edit): supabase.table('sub_tasks').delete().eq('id', s_id).execute(); st.session_state['active_proj_id'] = str(r_id); apply_changes()
             st.write("---")
@@ -462,13 +437,9 @@ with tabs[1]:
                 if ac2.button("🗑 삭제", key=f"pdel_{r_id}", disabled=disable_edit):
                     supabase.table('projects').delete().eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
                     
-    # ----------------------------------------------------------------------
-    # ▼▼▼ [여기서부터 새로 추가할 코드] ▼▼▼
     st.divider()
     with st.expander("📦 프로젝트 보관함 (종료된 업무)"):
         archived_projs = [p for p in proj_data if str(p.get("보관함이동") or 'FALSE').upper() == "TRUE"]
-        
-        # 현재 보고 있는 대상자(target_user)에 맞게 보관함 필터링
         if u_role != "마스터" or target_user != "전체":
             archived_projs = [p for p in archived_projs if p.get('담당자') == target_user]
 
@@ -489,73 +460,29 @@ with tabs[1]:
                 if not is_readonly:
                     if arc_c3.button("🔄 복구", key=f"unarc_{arc_id}", disabled=disable_edit):
                         supabase.table('projects').update({"보관함이동": False}).eq('id', arc_id).execute()
-                        st.session_state['active_proj_id'] = arc_id
-                        apply_changes()
+                        st.session_state['active_proj_id'] = arc_id; apply_changes()
                     if arc_c4.button("🗑 영구삭제", key=f"harddel_{arc_id}", disabled=disable_edit):
-                        supabase.table('projects').delete().eq('id', arc_id).execute()
-                        apply_changes()
-    # ▲▲▲ [여기까지 새로 추가할 코드] ▲▲▲
-    # ----------------------------------------------------------------------
+                        supabase.table('projects').delete().eq('id', arc_id).execute(); apply_changes()
   
 # ==========================================
-# 탭 3~5 (설정 유지)
+# 탭 3, 4: 마스터 환경설정 (계정 및 분류)
 # ==========================================
 if u_role == "마스터":
     with tab_set1:
-        st.header("⚙ 설정 1 (사내 계정 및 KPI 관리)")
-        c1, c2 = st.columns(2)
-        with c1:
-            u_df = pd.DataFrame(user_data)
-            e_u_df = st.data_editor(u_df, num_rows="dynamic", use_container_width=True)
-            if st.button("계정 정보 저장"):
-                orig_u_ids = set(u_df['id'].dropna()) if 'id' in u_df.columns else set()
-                new_u_ids = set(e_u_df['id'].dropna()) if 'id' in e_u_df.columns else set()
-                for did in orig_u_ids - new_u_ids: supabase.table('users').delete().eq('id', did).execute()
-                for r in e_u_df.to_dict('records'):
-                    if pd.isna(r.get('id')): r.pop('id', None) 
-                    supabase.table('users').upsert(r).execute()
-                apply_changes()
-        with c2:
-            st.subheader("✨ KPI 지표 상세 등록")
-            with st.form("add_kpi_form", clear_on_submit=True):
-                kc1, kc2 = st.columns(2)
-                n_k_name = kc1.text_input("KPI명 (예: 일계표 오류 건수)")
-                n_k_owner = kc2.selectbox("적용자(담당자)", ["공통"] + sorted(list(set([u.get('이름') for u in user_data if u.get('이름')]))))
-                
-                kc3, kc4, kc5 = st.columns([1, 1.5, 1])
-                n_k_score = kc3.text_input("배점 (예: 10)")
-                n_k_range = kc4.text_input("배점구간 (예: 0건 10점 / 1건 6점)")
-                n_k_cycle = kc5.text_input("주기 (예: 월, 분기, 연간)")
-                
-                n_k_target = st.text_input("목표값 (예: 0건, 100% 완료)")
-                n_k_desc = st.text_area("상세 예시 및 산출식")
-                
-                if st.form_submit_button("➕ 지표 등록", type="primary"):
-                    if n_k_name:
-                        supabase.table('settings').insert({
-                            "KPI명": n_k_name, "구분": n_k_owner, "배점": n_k_score,
-                            "배점구간": n_k_range, "주기": n_k_cycle, "목표값": n_k_target, "상세예시": n_k_desc
-                        }).execute()
-                        apply_changes()
-                        
-            st.write("---")
-            k_df = pd.DataFrame(kpi_config)
-            # 신규 컬럼들이 없을 경우를 대비해 빈 문자열로 초기화
-            for col in ['배점', '배점구간', '주기', '목표값', '상세예시']:
-                if col not in k_df.columns: k_df[col] = ""
-                
-            e_k_df = st.data_editor(k_df, num_rows="dynamic", use_container_width=True)
-            if st.button("💾 KPI 목록 일괄 저장"):
-                orig_k_ids = set(k_df['id'].dropna()) if 'id' in k_df.columns else set()
-                new_k_ids = set(e_k_df['id'].dropna()) if 'id' in e_k_df.columns else set()
-                for did in orig_k_ids - new_k_ids: supabase.table('settings').delete().eq('id', did).execute()
-                for r in e_k_df.to_dict('records'):
-                    if pd.isna(r.get('id')): r.pop('id', None)
-                    if r.get('KPI명'): supabase.table('settings').upsert(r).execute()
-                apply_changes()
-  
+        st.header("⚙ 설정 (사내 계정)")
+        u_df = pd.DataFrame(user_data)
+        e_u_df = st.data_editor(u_df, num_rows="dynamic", use_container_width=True)
+        if st.button("계정 정보 저장"):
+            orig_u_ids = set(u_df['id'].dropna()) if 'id' in u_df.columns else set()
+            new_u_ids = set(e_u_df['id'].dropna()) if 'id' in e_u_df.columns else set()
+            for did in orig_u_ids - new_u_ids: supabase.table('users').delete().eq('id', did).execute()
+            for r in e_u_df.to_dict('records'):
+                if pd.isna(r.get('id')): r.pop('id', None) 
+                supabase.table('users').upsert(r).execute()
+            apply_changes()
+
     with tab_set2:
-        st.header("⚙ 설정 2 (업무 분류 전용 관리)")
+        st.header("⚙ 설정 (업무 분류 전용 관리)")
         c_df = pd.DataFrame(cat_data)
         e_c_df = st.data_editor(c_df, num_rows="dynamic", use_container_width=False, width=600)
         if st.button("분류 목록 저장", type="primary"):
@@ -566,70 +493,183 @@ if u_role == "마스터":
                 if pd.isna(r.get('id')): r.pop('id', None)
                 if r.get('분류명'): supabase.table('categories').upsert(r).execute()
             apply_changes()
-  
-with tab_kpi:
-    st.header(f"📈 {target_user} KPI" if target_user != "전체" else "📈 전사 통합 KPI")
-    
-    # 💡 일반 직원용 KPI 지표 열람 기능 (상세 정보 포함)
-    with st.expander("📋 할당된 KPI 지표 상세 목록 보기", expanded=False):
-        my_kpi_list = [k for k in kpi_config if str(k.get('구분') or '공통').strip() in ['공통', kpi_owner] and str(k.get('KPI명') or '').strip() != ""]
-        if my_kpi_list:
-            df_kpi = pd.DataFrame(my_kpi_list)
-            for col in ['배점', '배점구간', '주기', '목표값', '상세예시']:
-                if col not in df_kpi.columns: df_kpi[col] = ""
-            
-            # 보기 좋은 순서로 컬럼 재배치
-            display_cols = [c for c in ['구분', 'KPI명', '배점', '배점구간', '주기', '목표값', '상세예시'] if c in df_kpi.columns]
-            st.dataframe(df_kpi[display_cols], use_container_width=True)
-        else:
-            st.info("할당된 KPI 지표가 없습니다.")
-    st.divider()
-  
-    stats = {}
-    for d in all_daily:
-        owner = str(d.get('담당자') or '알수없음')
-        k_name = str(d.get('KPI') or '기타').strip()
-        
-        if u_role != "마스터" and owner != u_name: continue
-        if u_role == "마스터" and target_user != "전체" and owner != target_user: continue
-        if k_name == "기타": continue  # '기타' 항목은 통계에서 제외
-        
-        stat_key = f"[{owner}] {k_name}" if u_role == "마스터" and target_user == "전체" else k_name
-        if stat_key not in stats: stats[stat_key] = {"sum": 0, "count": 0, "tasks": []}
-        
-        p_val = str(d.get('진행률') or '0')
-        stats[stat_key]["sum"] += int(p_val) if p_val.isdigit() else 0
-        stats[stat_key]["count"] += 1
-        stats[stat_key]["tasks"].append(d)  # 달성률 계산에 사용된 업무 원본 저장
 
-    if stats:
-        for stat_key in sorted(stats.keys()):
-            data = stats[stat_key]
-            avg = int(data["sum"] / data["count"]) if data["count"] > 0 else 0
+# ==========================================
+# 탭 KPI: 독립형 전면 개편 모듈
+# ==========================================
+with tab_kpi:
+    # --- 핵심 계산 로직 ---
+    def calculate_kpi_score(target, submissions):
+        t_id = target.get('id')
+        t_name = target.get('kpi_name', '')
+        t_owner = target.get('owner', '공통')
+        total = int(target.get('target_count') or 1)
+        weight = int(target.get('weight') or 0)
+        
+        # 필터링: 공통이면 모든 부서원의 '승인' 합산, 개인이면 '해당 대상자'의 '승인' 합산
+        if t_owner == "공통":
+            approved = len([s for s in submissions if str(s.get('kpi_id')) == str(t_id) and s.get('status') == '승인'])
+        else:
+            approved = len([s for s in submissions if str(s.get('kpi_id')) == str(t_id) and s.get('user_name') == t_owner and s.get('status') == '승인'])
             
-            # 💡 클릭하면 세부 업무 리스트가 나오는 아코디언(Expander) 형태
-            with st.expander(f"**{stat_key}** (평균 달성률: {avg}%, 총 {data['count']}건)"):
-                st.progress(avg / 100, text=f"평균 달성률: {avg}%")
-                st.markdown("---")
-                st.markdown("<small>📌 반영된 업무 리스트</small>", unsafe_allow_html=True)
+        missing = max(0, total - approved)
+        rate = (approved / total) * 100 if total > 0 else 0
+        
+        points = 0
+        if "누락" in t_name or "법정" in t_name: 
+            if missing == 0: points = 15
+            elif 1 <= missing <= 2: points = 8
+            else: points = 0
+        elif "정시율" in t_name: 
+            if rate >= 90: points = 10
+            elif rate >= 85: points = 8
+            elif rate >= 80: points = 6
+            elif rate >= 70: points = 3
+            else: points = 0
+        else: 
+            points = round((rate / 100) * weight, 1)
+            
+        return approved, total, points, rate, missing
+
+    # --- [마스터 전용 모드] ---
+    if u_role == "마스터" and target_user == "전체":
+        st.header("👑 전사 KPI 승인 및 지표 관리")
+        mt1, mt2 = st.tabs(["✅ 실무자 증빙 승인", "⚙️ KPI 목표 설정"])
+        
+        # 1) 증빙 승인 열람
+        with mt1:
+            st.subheader("대기 중인 확인 요청")
+            pending_reqs = [s for s in kpi_subs if s.get('status') == '대기']
+            if not pending_reqs:
+                st.info("현재 승인 대기 중인 증빙 자료가 없습니다.")
+            else:
+                for req in pending_reqs:
+                    t_info = next((t for t in kpi_targets if str(t.get('id')) == str(req.get('kpi_id'))), None)
+                    kpi_label = f"[{t_info['owner']}] {t_info['kpi_name']}" if t_info else "알 수 없는 지표"
+                    with st.container(border=True):
+                        st.markdown(f"**제출자:** {req.get('user_name')} | **지표:** {kpi_label} | **기간:** {req.get('period')}")
+                        st.write(f"**증빙 내역:** {req.get('evidence')}")
+                        ac1, ac2, _ = st.columns([1, 1, 6])
+                        if ac1.button("✅ 승인", key=f"app_{req.get('id')}"):
+                            supabase.table('kpi_submissions').update({"status": "승인"}).eq('id', req.get('id')).execute(); apply_changes()
+                        if ac2.button("❌ 반려", key=f"rej_{req.get('id')}"):
+                            supabase.table('kpi_submissions').update({"status": "반려"}).eq('id', req.get('id')).execute(); apply_changes()
+        
+        # 2) 지표 설정
+        with mt2:
+            st.subheader("새로운 KPI 목표 등록")
+            with st.form("new_kpi_target_form", clear_on_submit=True):
+                sc1, sc2 = st.columns(2)
+                t_name = sc1.text_input("KPI 지표명 (예: 법정 제출 누락률, 일계표 정시율)")
+                all_users = sorted(list(set([u.get('이름') for u in user_data if u.get('이름')])))
+                t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
-                for t in data["tasks"]:
-                    t_id = t.get('id')
-                    t_date = t.get('날짜') or ''
-                    t_prog = t.get('진행률') or 0
-                    t_name = str(t.get('업무명') or '').replace(chr(10), ' ')
+                sc3, sc4, sc5 = st.columns([1, 1, 1.5])
+                t_count = sc3.number_input("전체 대상 건수/일수 (목표)", min_value=1, value=14)
+                t_weight = sc4.number_input("배점", value=15)
+                t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
+                t_desc = st.text_area("산출식 및 설명 (예: 누락 0건 15점, 1~2건 8점)")
+                
+                if st.form_submit_button("➕ KPI 목표 생성", type="primary") and t_name:
+                    supabase.table('kpi_targets').insert({
+                        "kpi_name": t_name, "owner": t_owner, "target_count": t_count, 
+                        "weight": t_weight, "cycle": t_cycle, "description": t_desc
+                    }).execute(); apply_changes()
+            
+            st.divider()
+            st.subheader("등록된 KPI 지표 관리")
+            if not kpi_targets: st.info("등록된 지표가 없습니다.")
+            for i, target in enumerate(kpi_targets):
+                t_id = target.get('id')
+                # 💡 수정 폼 (Key 중복 방지 인덱스 i 추가)
+                if str(st.session_state.get('edit_kpi_id')) == str(t_id):
+                    with st.container(border=True):
+                        ec1, ec2 = st.columns(2)
+                        e_name = ec1.text_input("KPI명", value=target.get('kpi_name'), key=f"ekn_{t_id}_{i}")
+                        cur_own = target.get('owner')
+                        e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
+                        ec3, ec4, ec5 = st.columns([1, 1, 1.5])
+                        e_cnt = ec3.number_input("대상 건수", value=int(target.get('target_count') or 1), key=f"ekc_{t_id}_{i}")
+                        e_wgt = ec4.number_input("배점", value=int(target.get('weight') or 0), key=f"ekw_{t_id}_{i}")
+                        e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
+                        e_desc = st.text_area("산출식", value=target.get('description') or '', key=f"ekd_{t_id}_{i}")
+                        
+                        eb1, eb2, _ = st.columns([1, 1, 4])
+                        if eb1.button("💾 저장", type="primary", key=f"esvk_{t_id}_{i}"):
+                            supabase.table('kpi_targets').update({
+                                "kpi_name": e_name, "owner": e_own, "target_count": e_cnt,
+                                "weight": e_wgt, "cycle": e_cyc, "description": e_desc
+                            }).eq('id', t_id).execute()
+                            st.session_state['edit_kpi_id'] = None; apply_changes()
+                        if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
+                            st.session_state['edit_kpi_id'] = None; st.rerun()
+                else:
+                    with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표 {target.get('target_count')}건 / 배점 {target.get('weight')}점)"):
+                        st.write(f"- 주기: {target.get('cycle')}")
+                        st.write(f"- 산출식: {target.get('description')}")
+                        b1, b2, _ = st.columns([1, 1, 6])
+                        if b1.button("✏ 수정", key=f"kedt_{t_id}_{i}"): st.session_state['edit_kpi_id'] = t_id; st.rerun()
+                        if b2.button("🗑 삭제", key=f"kdel_{t_id}_{i}"): supabase.table('kpi_targets').delete().eq('id', t_id).execute(); apply_changes()
+
+    # --- [실무자 모드] ---
+    else:
+        st.header(f"📈 {target_user} KPI 달성 현황 및 증빙 제출")
+        my_common = [t for t in kpi_targets if t.get('owner') == '공통']
+        my_personal = [t for t in kpi_targets if t.get('owner') == target_user]
+        
+        st.subheader("🏆 현재 스코어 보드")
+        if not my_common and not my_personal:
+            st.info("할당된 KPI 지표가 없습니다.")
+        else:
+            all_my_targets = my_common + my_personal
+            cols = st.columns(len(all_my_targets) if len(all_my_targets) > 0 else 1)
+            for i, t in enumerate(all_my_targets):
+                app, tot, pts, rate, mis = calculate_kpi_score(t, kpi_subs)
+                metric_label = f"[{t['owner']}] {t['kpi_name']}"
+                if "누락" in t['kpi_name'] or "법정" in t['kpi_name']:
+                    cols[i].metric(metric_label, f"{pts}점", f"누락 {mis}건 (팀 승인 {app}/{tot}건)", delta_color="inverse")
+                else:
+                    cols[i].metric(metric_label, f"{pts}점", f"달성률 {round(rate, 1)}% (내 승인 {app}/{tot}건)")
+
+        st.divider()
+        if not is_readonly:
+            st.subheader("📤 증빙 자료 확인 요청")
+            with st.form("kpi_submission_form", clear_on_submit=True):
+                s1, s2 = st.columns(2)
+                target_opts = my_common + my_personal
+                if target_opts:
+                    sel_target = s1.selectbox("지표 선택", target_opts, format_func=lambda x: f"[{x['owner']}] {x['kpi_name']}")
+                    sub_period = s2.text_input("대상 기간/분류 (예: 1분기, 4월 15일 일계표)")
+                    sub_evidence = st.text_area("증빙 내용 및 위치 (예: 제반서류 그룹웨어 결재완료)")
                     
-                    kt1, kt2, kt3 = st.columns([5, 2, 1.5])
-                    kt1.write(f"· {t_name}")
-                    kt2.write(f"{t_date} ({t_prog}%)")
-                    
-                    # 💡 해당없음 버튼 (해당 업무의 KPI 항목을 '기타'로 변경하여 제외시킴)
-                    if not is_readonly and kt3.button("🚫 해당없음", key=f"kpiex_{t_id}"):
-                        supabase.table('daily').update({"KPI": "기타"}).eq('id', t_id).execute()
-                        apply_changes()
-    else: 
-        st.info("KPI에 반영된 업무 데이터가 없습니다.")
-  
+                    if st.form_submit_button("확인 요청 전송", type="primary"):
+                        supabase.table('kpi_submissions').insert({
+                            "user_name": u_name, "kpi_id": sel_target['id'],
+                            "period": sub_period, "evidence": sub_evidence, "status": "대기"
+                        }).execute()
+                        st.success("확인 요청이 마스터에게 전송되었습니다."); apply_changes()
+                else:
+                    st.warning("등록된 지표가 없습니다.")
+                    st.form_submit_button("제출 불가", disabled=True)
+
+        st.divider()
+        st.subheader("📜 나의 제출 내역")
+        my_history = [s for s in kpi_subs if s.get('user_name') == target_user]
+        if not my_history:
+            st.info("제출된 증빙 내역이 없습니다.")
+        else:
+            for s in reversed(my_history):
+                t_info = next((t for t in kpi_targets if str(t.get('id')) == str(s.get('kpi_id'))), None)
+                t_name = f"[{t_info['owner']}] {t_info['kpi_name']}" if t_info else "삭제된 지표"
+                status_color = "#1E88E5" if s['status'] == '대기' else "#43A047" if s['status'] == '승인' else "#E53935"
+                
+                with st.container(border=True):
+                    st.markdown(f"**{t_name}** | 기간: {s['period']} | 상태: <span style='color:{status_color}; font-weight:bold;'>{s['status']}</span>", unsafe_allow_html=True)
+                    st.write(f"- 증빙: {s['evidence']}")
+                    if s['status'] == '대기' and not is_readonly:
+                        if st.button("요청 취소", key=f"dels_{s['id']}"):
+                            supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
+
 # ==========================================
 # 탭 5: 데이터/보고서 
 # ==========================================
@@ -673,7 +713,6 @@ with tab_rep:
             
             task_n = str(t.get('업무명') or '').replace(chr(10), '<br>')
             
-            # 💡 [수정 4] 일일업무 텍스트가 줄바꿈(여러 줄)일 경우 첫 줄만 진하게(Bold), 나머지는 연하게 처리
             task_lines = task_n.split('<br>')
             if len(task_lines) > 1:
                 styled_task_n = f"<b>{task_lines[0]}</b><br><span style='color:#777; font-size:0.9em;'>" + "<br>".join(task_lines[1:]) + "</span>"
@@ -688,7 +727,6 @@ with tab_rep:
                 h_d_html += f"<li style='margin-bottom:8px;'>{icon} {styled_task_n} {prog_txt}</li>"
                 
         for p_n, d in grouped_proj.items():
-            # 💡 [수정 2] 해당 프로젝트의 모든 하위업무가 100%인지 검사하여 프로젝트 이름 옆에 (완료) 표기
             p_sub_list = sub_dict.get(p_n, [])
             is_all_done = False
             if len(p_sub_list) > 0 and all(int(str(s.get('진행률') or '0')) == 100 for s in p_sub_list):
@@ -708,7 +746,6 @@ with tab_rep:
             pn = p.get('프로젝트명') or ''; valid_subs = [s for s in sub_dict.get(pn, []) if not bool(s.get('보고서제외', False))]
             if not valid_subs: continue 
             
-            # 💡 [수정 1] 하위 세부업무가 모두 100%인지 확인하여 HTML 보고서에 (완료) 추가
             is_all_done = all(int(str(s.get('진행률') or '0')) == 100 for s in valid_subs)
             done_badge = " <span style='color:#2e7d32; font-weight:bold;'>(완료)</span>" if is_all_done else ""
             
@@ -741,7 +778,6 @@ with tab_rep:
             valid_subs = [s for s in sub_dict.get(pn, []) if not bool(s.get('보고서제외', False))]
             if not valid_subs: continue
             
-            # 💡 [수정 1] 하위 세부업무가 모두 100%인지 확인하여 엑셀 보고서에 (완료) 추가
             is_all_done = all(int(str(s.get('진행률') or '0')) == 100 for s in valid_subs)
             done_text = " (완료)" if is_all_done else ""
             
