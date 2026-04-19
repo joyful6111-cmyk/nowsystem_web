@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V41", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V42", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -33,7 +33,7 @@ except Exception as e:
     st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 데이터 로드 (상세 KPI 테이블 추가)
+# 💡 데이터 로드 (상세 KPI 테이블 포함)
 @st.cache_data(ttl=30)
 def load_db_data():
     try:
@@ -44,7 +44,6 @@ def load_db_data():
         users = supabase.table('users').select("*").execute().data or []
         categories = supabase.table('categories').select("*").execute().data or []
         
-        # 신규 독립형 KPI 테이블 로드
         kpi_targets = supabase.table('kpi_targets').select("*").execute().data or []
         kpi_details = supabase.table('kpi_details').select("*").execute().data or []
         kpi_submissions = supabase.table('kpi_submissions').select("*").execute().data or []
@@ -244,13 +243,10 @@ with tabs[0]:
                     if is_proj_task and "::" in old_p_info:
                         p_n, old_s_n = old_p_info.split("::", 1)
                         new_p_info = f"{p_n}::{e_name}"
-                        
                         s_id_match = next((s.get('id') for s in sub_data if s.get('프로젝트명') == p_n and s.get('세부업무명') == old_s_n), None)
                         if s_id_match: supabase.table('sub_tasks').update({"세부업무명": e_name}).eq('id', s_id_match).execute()
-                            
                         p_id_match = next((p.get('id') for p in proj_data if p.get('프로젝트명') == p_n), None)
                         if p_id_match: supabase.table('projects').update({"분류": e_cat}).eq('id', p_id_match).execute()
-                            
                         for d in all_daily:
                             if str(d.get('연결프로젝트') or '') == old_p_info:
                                 supabase.table('daily').update({"연결프로젝트": new_p_info, "업무명": e_name, "분류": e_cat}).eq('id', d.get('id')).execute()
@@ -258,11 +254,10 @@ with tabs[0]:
                         supabase.table('daily').update({"업무명": e_name, "분류": e_cat}).eq('id', r_id).execute()
                         
                     st.session_state['edit_d_id'] = None; apply_changes()
-                    
                 if eb2.button("취소", key=f"ecan_{r_id}"): st.session_state['edit_d_id'] = None; st.rerun()
             continue
             
-        c1, c2, c3, c4, c5 = st.columns([3.5, 2.5, 1.2, 0.9, 0.9])
+        c1, c2, c3, c4, c5 = st.columns([4, 2.5, 1.2, 0.9, 0.9])
         d_date = str(row.get('날짜') or '')
         carry_txt = f" <small style='color:#E65100; font-weight:bold;'>[🔥이월: {d_date}]</small>" if d_date < t_str else ""
         badge = f" <small style='color:blue;'>[{row.get('담당자') or ''}]</small>" if target_user == "전체" else ""
@@ -273,9 +268,8 @@ with tabs[0]:
         cur_p = int(str(row.get('진행률') or '0')) if str(row.get('진행률') or '0').isdigit() else 0
         new_p = c2.slider("진행", 0, 100, cur_p, 10, key=f"ds_{r_id}", label_visibility="collapsed", disabled=disable_edit)
         
-        # 💡 [버그 픽스 1] 일일업무에서 슬라이더 조작 시 프로젝트 탭 세션 캐시 강제 덮어쓰기
+        # 💡 [버그 픽스 1] 일일업무 슬라이더 조작 시 -> 프로젝트 세션 삭제 (API 예외 방지)
         if not disable_edit and new_p != cur_p:
-            st.session_state[f"ds_{r_id}"] = new_p
             supabase.table('daily').update({"진행률": new_p}).eq('id', r_id).execute()
             if new_p == 100 and d_date < t_str:
                 if str(r_id) not in st.session_state['finished_today']:
@@ -286,14 +280,14 @@ with tabs[0]:
                 if "::" in p_info:
                     p_n, s_n = p_info.split("::", 1)
                     p_n, s_n = p_n.strip(), s_n.strip()
-                    
                     for s_item in sub_data:
                         db_p_n = str(s_item.get('프로젝트명') or '').strip()
                         db_s_n = str(s_item.get('세부업무명') or '').strip()
                         if db_p_n == p_n and db_s_n == s_n:
                             sub_id = s_item.get('id')
                             supabase.table('sub_tasks').update({"진행률": new_p}).eq('id', sub_id).execute()
-                            st.session_state[f"s_sld_{sub_id}"] = new_p
+                            if f"s_sld_{sub_id}" in st.session_state:
+                                del st.session_state[f"s_sld_{sub_id}"]
                             break
             apply_changes()
             
@@ -327,7 +321,7 @@ with tabs[0]:
                     supabase.table('routines').delete().eq('id', r_id).execute(); apply_changes()
   
 # ==========================================
-# 탭 2: 프로젝트 관리 
+# 탭 2: 프로젝트 관리
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
@@ -379,7 +373,6 @@ with tabs[1]:
             
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id')
-                
                 if not is_readonly and str(st.session_state.get('edit_s_id')) == str(s_id):
                     with st.container(border=True):
                         e_s_name = st.text_area("세부업무명 수정", s.get('세부업무명') or '', height=80)
@@ -387,11 +380,9 @@ with tabs[1]:
                         if eb1.button("저장", type="primary", key=f"esv_s_{s_id}"):
                             supabase.table('sub_tasks').update({"세부업무명": e_s_name}).eq('id', s_id).execute()
                             old_s_name = s.get('세부업무명') or ''
-                            
                             for d in all_daily:
                                 if str(d.get('연결프로젝트') or '') == f"{pn}::{old_s_name}":
                                     supabase.table('daily').update({"연결프로젝트": f"{pn}::{e_s_name}", "업무명": e_s_name}).eq('id', d.get('id')).execute()
-                                    
                             st.session_state['edit_s_id'] = None; st.session_state['active_proj_id'] = r_id; apply_changes()
                         if eb2.button("취소", key=f"ecan_s_{s_id}"): st.session_state['edit_s_id'] = None; st.session_state['active_proj_id'] = r_id; st.rerun()
                     continue
@@ -402,14 +393,11 @@ with tabs[1]:
                 cur_sp = int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0
                 sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s_id}", label_visibility="collapsed", disabled=disable_edit)
                 
-                # 💡 [버그 픽스 2] 프로젝트에서 조작 시 일일업무 캐시 강제 덮어쓰기
+                # 💡 [버그 픽스 2] 프로젝트에서 슬라이더 조작 시 -> 일일업무 세션 삭제
                 if not disable_edit and sp != cur_sp:
-                    st.session_state[f"s_sld_{s_id}"] = sp
                     supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s_id).execute()
-                    
                     target_p_n = str(pn).strip()
                     target_s_n = str(s.get('세부업무명') or '').strip()
-                    
                     for d in all_daily:
                         if str(d.get('프로젝트연동') or 'FALSE').upper() == "TRUE":
                             d_info = str(d.get('연결프로젝트') or '')
@@ -418,21 +406,23 @@ with tabs[1]:
                                 if d_p_n.strip() == target_p_n and d_s_n.strip() == target_s_n:
                                     d_id = d.get('id')
                                     supabase.table('daily').update({"진행률": sp}).eq('id', d_id).execute()
-                                    st.session_state[f"ds_{d_id}"] = sp
-                            
+                                    if f"ds_{d_id}" in st.session_state:
+                                        del st.session_state[f"ds_{d_id}"]
                     st.session_state['active_proj_id'] = str(r_id); apply_changes()
                
-                # 💡 [버그 픽스 3] ✅완료 버튼 클릭 시에도 강제 동기화
+                # 💡 [버그 픽스 3] ✅완료 버튼 클릭 시 -> 일일업무 세션 삭제
                 if sl3.button("✅완료", key=f"sdone_{s_id}", disabled=disable_edit):
-                    st.session_state[f"s_sld_{s_id}"] = 100
                     supabase.table('sub_tasks').update({"진행률": 100}).eq('id', s_id).execute()
+                    if f"s_sld_{s_id}" in st.session_state:
+                        del st.session_state[f"s_sld_{s_id}"]
                     for d in all_daily:
                         d_link = str(d.get('연결프로젝트') or '').strip()
                         s_link = f"{pn}::{s.get('세부업무명')}".strip()
                         if d_link == s_link:
                             d_id = d.get('id')
                             supabase.table('daily').update({"진행률": 100}).eq('id', d_id).execute()
-                            st.session_state[f"ds_{d_id}"] = 100
+                            if f"ds_{d_id}" in st.session_state:
+                                del st.session_state[f"ds_{d_id}"]
                     st.session_state['active_proj_id'] = str(r_id); apply_changes()
   
                 s_prog = bool(s.get('진행중', False))
@@ -458,7 +448,6 @@ with tabs[1]:
     st.divider()
     with st.expander("📦 프로젝트 보관함 (종료된 업무)"):
         archived_projs = [p for p in proj_data if str(p.get("보관함이동") or 'FALSE').upper() == "TRUE"]
-        
         if u_role != "마스터" or target_user != "전체":
             archived_projs = [p for p in archived_projs if p.get('담당자') == target_user]
 
@@ -519,7 +508,6 @@ if u_role == "마스터":
 # 탭 4: 전면 개편된 독립형 KPI 시스템 (상세할당 포함)
 # ==========================================
 with tab_kpi:
-    # --- 핵심 계산 로직 ---
     def calculate_kpi_score(target, submissions):
         t_id = target.get('id')
         t_name = target.get('kpi_name', '')
@@ -527,7 +515,6 @@ with tab_kpi:
         total = int(target.get('target_count') or 1)
         weight = int(target.get('weight') or 0)
         
-        # 필터링 로직: 공통이면 모든 유저의 해당 지표 승인 합산, 개인이면 본인의 승인만 합산
         if t_owner == "공통":
             approved = len([s for s in submissions if str(s.get('kpi_id')) == str(t_id) and s.get('status') == '승인'])
         else:
@@ -552,12 +539,10 @@ with tab_kpi:
             
         return approved, total, points, rate, missing
 
-    # --- [마스터 전용 화면] ---
     if u_role == "마스터" and target_user == "전체":
         st.header("👑 전사 KPI 승인 및 지표 할당")
         mt1, mt2 = st.tabs(["✅ 실무자 증빙 승인", "⚙️ KPI 목표 및 상세 할당 설정"])
         
-        # 1. 마스터 승인 (상세 정보 노출)
         with mt1:
             st.subheader("대기 중인 확인 요청")
             pending_reqs = [s for s in kpi_subs if s.get('status') == '대기']
@@ -579,7 +564,6 @@ with tab_kpi:
                         if ac2.button("❌ 반려", key=f"rej_{p['id']}"):
                             supabase.table('kpi_submissions').update({"status": "반려"}).eq('id', p['id']).execute(); apply_changes()
         
-        # 2. 마스터 KPI 세팅 및 상세 할당
         with mt2:
             with st.form("new_kpi_target_form", clear_on_submit=True):
                 st.subheader("새로운 메인 KPI 지표 생성")
@@ -623,7 +607,6 @@ with tab_kpi:
                         if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
                             st.session_state['edit_kpi_id'] = None; st.rerun()
                 else:
-                    # 💡 [핵심] 공통 지표에 대한 상세 업무(Sub-KPI) 추가 및 할당 UI
                     with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표 {target.get('target_count')}건 / 배점 {target.get('weight')}점)"):
                         st.write(f"ℹ️ {target.get('description')}")
                         st.markdown("**🔹 상세 업무(Sub-KPI) 할당 및 리스트**")
@@ -638,7 +621,7 @@ with tab_kpi:
                         
                         with st.form(key=f"add_det_{t_id}", clear_on_submit=True):
                             c_n, c_a, c_b = st.columns([5, 3, 2])
-                            new_d_name = c_n.text_input("상세 업무명 (예: 1분기 건강검진안내)", label_visibility="collapsed", placeholder="추가할 상세 업무명")
+                            new_d_name = c_n.text_input("상세 업무명", label_visibility="collapsed", placeholder="추가할 상세 업무명")
                             new_d_assig = c_a.selectbox("담당자", all_users, label_visibility="collapsed")
                             if c_b.form_submit_button("상세 할당"):
                                 if new_d_name:
@@ -650,13 +633,11 @@ with tab_kpi:
                         if b1.button("✏ 메인 지표 수정", key=f"kedt_{t_id}_{i}"): st.session_state['edit_kpi_id'] = t_id; st.rerun()
                         if b2.button("🗑 메인 지표 삭제", key=f"kdel_{t_id}_{i}"): supabase.table('kpi_targets').delete().eq('id', t_id).execute(); apply_changes()
 
-    # --- [실무자 전용 화면] ---
     else:
         st.header(f"📈 {target_user} KPI 달성 현황 및 증빙 제출")
         my_common = [t for t in kpi_targets if t.get('owner') == '공통']
         my_personal = [t for t in kpi_targets if t.get('owner') == target_user]
         
-        # 1. 성과 대시보드
         st.subheader("🏆 현재 스코어 보드")
         if not my_common and not my_personal:
             st.info("할당된 KPI 지표가 없습니다.")
@@ -673,7 +654,6 @@ with tab_kpi:
 
         st.divider()
         
-        # 2. 증빙 제출 (개인 KPI + 할당받은 상세 공통 KPI 분기 처리)
         if not is_readonly:
             st.subheader("📤 증빙 자료 확인 요청")
             
@@ -706,7 +686,6 @@ with tab_kpi:
                     st.form_submit_button("제출 불가", disabled=True)
 
         st.divider()
-        # 3. 제출 내역 및 취소
         st.subheader("📜 나의 제출 내역")
         my_history = [s for s in kpi_subs if s.get('user_name') == target_user]
         if not my_history:
@@ -727,7 +706,7 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 데이터/보고서 
+# 탭 5: 데이터/보고서 (기존 기능 100% 유지)
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
