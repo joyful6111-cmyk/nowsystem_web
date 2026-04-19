@@ -59,7 +59,6 @@ if 'user_info' not in st.session_state: st.session_state['user_info'] = {}
 if 'active_proj_id' not in st.session_state: st.session_state['active_proj_id'] = None
 if 'edit_d_id' not in st.session_state: st.session_state['edit_d_id'] = None
 if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
-if 'edit_kpi_id' not in st.session_state: st.session_state['edit_kpi_id'] = None
 
 def check_login(user_id, user_pw):
     _, _, _, _, _, users, _ = load_db_data()
@@ -464,6 +463,7 @@ with tabs[1]:
                     supabase.table('projects').delete().eq('id', r_id).execute(); st.session_state['active_proj_id'] = None; apply_changes()
                     
     # ----------------------------------------------------------------------
+    # ▼▼▼ [여기서부터 새로 추가할 코드] ▼▼▼
     st.divider()
     with st.expander("📦 프로젝트 보관함 (종료된 업무)"):
         archived_projs = [p for p in proj_data if str(p.get("보관함이동") or 'FALSE').upper() == "TRUE"]
@@ -494,6 +494,7 @@ with tabs[1]:
                     if arc_c4.button("🗑 영구삭제", key=f"harddel_{arc_id}", disabled=disable_edit):
                         supabase.table('projects').delete().eq('id', arc_id).execute()
                         apply_changes()
+    # ▲▲▲ [여기까지 새로 추가할 코드] ▲▲▲
     # ----------------------------------------------------------------------
   
 # ==========================================
@@ -538,60 +539,20 @@ if u_role == "마스터":
                         apply_changes()
                         
             st.write("---")
-            st.subheader("📋 등록된 KPI 지표 관리")
-            
-            for i, k in enumerate(kpi_config):
-                k_id = k.get('id')
-                k_name = k.get('KPI명')
-                if not k_name: continue
+            k_df = pd.DataFrame(kpi_config)
+            # 신규 컬럼들이 없을 경우를 대비해 빈 문자열로 초기화
+            for col in ['배점', '배점구간', '주기', '목표값', '상세예시']:
+                if col not in k_df.columns: k_df[col] = ""
                 
-                # 💡 수정 버튼이 눌렸을 때 나타나는 입력 폼
-                if st.session_state.get('edit_kpi_id') is not None and str(st.session_state.get('edit_kpi_id')) == str(k_id):
-                    with st.container(border=True):
-                        ek1, ek2 = st.columns(2)
-                        e_k_name = ek1.text_input("KPI명", value=k_name, key=f"ekn_{k_id}_{i}")
-                        
-                        all_users = sorted(list(set([u.get('이름') for u in user_data if u.get('이름')])))
-                        owner_opts = ["공통"] + all_users
-                        cur_owner = k.get('구분', '공통')
-                        cur_idx = owner_opts.index(cur_owner) if cur_owner in owner_opts else 0
-                        e_k_owner = ek2.selectbox("적용자(담당자)", owner_opts, index=cur_idx, key=f"eko_{k_id}_{i}")
-                        
-                        ek3, ek4, ek5 = st.columns([1, 1.5, 1])
-                        e_k_score = ek3.text_input("배점", value=k.get('배점') or '', key=f"eks_{k_id}_{i}")
-                        e_k_range = ek4.text_input("배점구간", value=k.get('배점구간') or '', key=f"ekr_{k_id}_{i}")
-                        e_k_cycle = ek5.text_input("주기", value=k.get('주기') or '', key=f"ekc_{k_id}_{i}")
-                        
-                        e_k_target = st.text_input("목표값", value=k.get('목표값') or '', key=f"ekt_{k_id}_{i}")
-                        e_k_desc = st.text_area("상세 예시 및 산출식", value=k.get('상세예시') or '', key=f"ekd_{k_id}_{i}")
-                        
-                        eb1, eb2, _ = st.columns([1, 1, 4])
-                        if eb1.button("💾 저장", type="primary", key=f"esvk_{k_id}_{i}"):
-                            supabase.table('settings').update({
-                                "KPI명": e_k_name, "구분": e_k_owner, "배점": e_k_score,
-                                "배점구간": e_k_range, "주기": e_k_cycle, "목표값": e_k_target, "상세예시": e_k_desc
-                            }).eq('id', k_id).execute()
-                            st.session_state['edit_kpi_id'] = None
-                            apply_changes()
-                        if eb2.button("취소", key=f"ecank_{k_id}_{i}"): 
-                            st.session_state['edit_kpi_id'] = None
-                            st.rerun()
-                # 💡 기본 화면 (조회 및 수정/삭제 버튼)
-                else:
-                    with st.expander(f"[{k.get('구분') or '공통'}] {k_name}"):
-                        st.write(f"- **배점:** {k.get('배점') or '-'}")
-                        st.write(f"- **배점구간:** {k.get('배점구간') or '-'}")
-                        st.write(f"- **주기:** {k.get('주기') or '-'}")
-                        st.write(f"- **목표값:** {k.get('목표값') or '-'}")
-                        st.write(f"- **상세예시:** {k.get('상세예시') or '-'}")
-                        
-                        btn1, btn2, _ = st.columns([1, 1, 4])
-                        if btn1.button("✏ 수정", key=f"edtk_{k_id}_{i}"):
-                            st.session_state['edit_kpi_id'] = k_id
-                            st.rerun()
-                        if btn2.button("🗑 삭제", key=f"delk_{k_id}_{i}"):
-                            supabase.table('settings').delete().eq('id', k_id).execute()
-                            apply_changes()
+            e_k_df = st.data_editor(k_df, num_rows="dynamic", use_container_width=True)
+            if st.button("💾 KPI 목록 일괄 저장"):
+                orig_k_ids = set(k_df['id'].dropna()) if 'id' in k_df.columns else set()
+                new_k_ids = set(e_k_df['id'].dropna()) if 'id' in e_k_df.columns else set()
+                for did in orig_k_ids - new_k_ids: supabase.table('settings').delete().eq('id', did).execute()
+                for r in e_k_df.to_dict('records'):
+                    if pd.isna(r.get('id')): r.pop('id', None)
+                    if r.get('KPI명'): supabase.table('settings').upsert(r).execute()
+                apply_changes()
   
     with tab_set2:
         st.header("⚙ 설정 2 (업무 분류 전용 관리)")
