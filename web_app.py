@@ -33,8 +33,7 @@ except Exception as e:
     st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 데이터 로드 (상세 KPI 테이블 포함)
-@st.cache_data(ttl=30)
+# 💡 [버그 픽스] 실시간 진행률 및 요율 동기화를 위해 캐시(@st.cache_data) 완전 제거
 def load_db_data():
     try:
         daily = supabase.table('daily').select("*").execute().data or []
@@ -44,6 +43,7 @@ def load_db_data():
         users = supabase.table('users').select("*").execute().data or []
         categories = supabase.table('categories').select("*").execute().data or []
         
+        # 신규 독립형 KPI 테이블 로드
         kpi_targets = supabase.table('kpi_targets').select("*").execute().data or []
         kpi_details = supabase.table('kpi_details').select("*").execute().data or []
         kpi_submissions = supabase.table('kpi_submissions').select("*").execute().data or []
@@ -54,8 +54,7 @@ def load_db_data():
         return [], [], [], [], [], [], [], [], []
 
 def apply_changes():
-    load_db_data.clear() 
-    st.rerun()
+    st.rerun() # 캐시 제거로 인해 즉시 rerun만 수행하여 실시간 최신화 보장
 
 # --- [보안 및 로그인] ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
@@ -243,10 +242,13 @@ with tabs[0]:
                     if is_proj_task and "::" in old_p_info:
                         p_n, old_s_n = old_p_info.split("::", 1)
                         new_p_info = f"{p_n}::{e_name}"
+                        
                         s_id_match = next((s.get('id') for s in sub_data if s.get('프로젝트명') == p_n and s.get('세부업무명') == old_s_n), None)
                         if s_id_match: supabase.table('sub_tasks').update({"세부업무명": e_name}).eq('id', s_id_match).execute()
+                            
                         p_id_match = next((p.get('id') for p in proj_data if p.get('프로젝트명') == p_n), None)
                         if p_id_match: supabase.table('projects').update({"분류": e_cat}).eq('id', p_id_match).execute()
+                            
                         for d in all_daily:
                             if str(d.get('연결프로젝트') or '') == old_p_info:
                                 supabase.table('daily').update({"연결프로젝트": new_p_info, "업무명": e_name, "분류": e_cat}).eq('id', d.get('id')).execute()
@@ -257,18 +259,18 @@ with tabs[0]:
                 if eb2.button("취소", key=f"ecan_{r_id}"): st.session_state['edit_d_id'] = None; st.rerun()
             continue
             
-        c1, c2, c3, c4, c5 = st.columns([4, 2.5, 1.2, 0.9, 0.9])
+        c1, c2, c3, c4, c5 = st.columns([3.5, 2.5, 1.2, 0.9, 0.9])
         d_date = str(row.get('날짜') or '')
         carry_txt = f" <small style='color:#E65100; font-weight:bold;'>[🔥이월: {d_date}]</small>" if d_date < t_str else ""
         badge = f" <small style='color:blue;'>[{row.get('담당자') or ''}]</small>" if target_user == "전체" else ""
         
-        if str(row.get('프로젝트연동')).upper() == "TRUE": c1.markdown(f"**[{row.get('분류')}]** <span style='color:#555;'>{str(row.get('연결프로젝트')).replace('::', ' > ')}</span>{carry_txt}{badge}", unsafe_allow_html=True)
-        else: c1.markdown(f"**[{row.get('분류')}]** {str(row.get('업무명') or '').replace(chr(10), '<br>')}{carry_txt}{badge}", unsafe_allow_html=True)
+        if str(row.get('프로젝트연동')).upper() == "TRUE": c1.markdown(f"**[{row.get('분류') or '프로젝트'}]** <span style='color:#555;'>{str(row.get('연결프로젝트')).replace('::', ' > ')}</span>{carry_txt}{badge}", unsafe_allow_html=True)
+        else: c1.markdown(f"**[{row.get('분류') or '기타'}]** {str(row.get('업무명') or '').replace(chr(10), '<br>')}{carry_txt}{badge}", unsafe_allow_html=True)
         
         cur_p = int(str(row.get('진행률') or '0')) if str(row.get('진행률') or '0').isdigit() else 0
         new_p = c2.slider("진행", 0, 100, cur_p, 10, key=f"ds_{r_id}", label_visibility="collapsed", disabled=disable_edit)
         
-        # 💡 [버그 픽스 1] 일일업무 슬라이더 조작 시 -> 프로젝트 세션 삭제 (API 예외 방지)
+        # 💡 [진행률 양방향 동기화 방어] 일일업무 슬라이더 조작
         if not disable_edit and new_p != cur_p:
             supabase.table('daily').update({"진행률": new_p}).eq('id', r_id).execute()
             if new_p == 100 and d_date < t_str:
@@ -280,6 +282,7 @@ with tabs[0]:
                 if "::" in p_info:
                     p_n, s_n = p_info.split("::", 1)
                     p_n, s_n = p_n.strip(), s_n.strip()
+                    
                     for s_item in sub_data:
                         db_p_n = str(s_item.get('프로젝트명') or '').strip()
                         db_s_n = str(s_item.get('세부업무명') or '').strip()
@@ -321,7 +324,7 @@ with tabs[0]:
                     supabase.table('routines').delete().eq('id', r_id).execute(); apply_changes()
   
 # ==========================================
-# 탭 2: 프로젝트 관리
+# 탭 2: 프로젝트 관리 
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
@@ -373,6 +376,7 @@ with tabs[1]:
             
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id')
+                
                 if not is_readonly and str(st.session_state.get('edit_s_id')) == str(s_id):
                     with st.container(border=True):
                         e_s_name = st.text_area("세부업무명 수정", s.get('세부업무명') or '', height=80)
@@ -393,7 +397,7 @@ with tabs[1]:
                 cur_sp = int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0
                 sp = sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s_id}", label_visibility="collapsed", disabled=disable_edit)
                 
-                # 💡 [버그 픽스 2] 프로젝트에서 슬라이더 조작 시 -> 일일업무 세션 삭제
+                # 💡 [진행률 양방향 동기화 방어] 프로젝트 슬라이더 조작
                 if not disable_edit and sp != cur_sp:
                     supabase.table('sub_tasks').update({"진행률": sp}).eq('id', s_id).execute()
                     target_p_n = str(pn).strip()
@@ -410,7 +414,7 @@ with tabs[1]:
                                         del st.session_state[f"ds_{d_id}"]
                     st.session_state['active_proj_id'] = str(r_id); apply_changes()
                
-                # 💡 [버그 픽스 3] ✅완료 버튼 클릭 시 -> 일일업무 세션 삭제
+                # 💡 [진행률 양방향 동기화 방어] ✅완료 버튼 조작
                 if sl3.button("✅완료", key=f"sdone_{s_id}", disabled=disable_edit):
                     supabase.table('sub_tasks').update({"진행률": 100}).eq('id', s_id).execute()
                     if f"s_sld_{s_id}" in st.session_state:
@@ -706,7 +710,7 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 데이터/보고서 (기존 기능 100% 유지)
+# 탭 5: 데이터/보고서 
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
