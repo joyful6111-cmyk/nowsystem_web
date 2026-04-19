@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V48", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V49", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -189,9 +189,12 @@ with st.sidebar:
     lock_key = f"lock_{t_str}_{target_user}"
     if lock_key not in st.session_state: st.session_state[lock_key] = False
     is_locked = st.session_state[lock_key]
-    disable_edit = is_locked or (u_role == "마스터" and target_user != u_name)
+    
+    # 💡 [버그 픽스] 누락된 is_readonly 변수 복원
+    is_readonly = (u_role == "마스터" and target_user != u_name)
+    disable_edit = is_locked or is_readonly
   
-    if u_role == "마스터" and target_user != u_name:
+    if is_readonly:
         st.info("👀 모니터링 전용 모드 (수정 불가)")
     elif is_locked:
         st.success(f"🔒 {target_user} 업무 마감됨")
@@ -199,7 +202,6 @@ with st.sidebar:
     else:
         if st.button("🔒 일과 마감하기", use_container_width=True, type="primary"): st.session_state[lock_key] = True; st.rerun()
   
-    # 💡 [요청사항 반영] 마감버튼 아래 및 로그아웃 위 공용 게시판
     st.divider()
     render_shared_board('요청사항', "📬 타 부서 요청 사항 (공용)")
     render_shared_board('세금계산서', "💰 금주 세금계산서 현황 (매주 리셋)", is_weekly=True)
@@ -242,7 +244,7 @@ for s in sub_data:
     if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 💡 콜백 함수 세팅 (기존 유지)
+# 💡 콜백 함수 세팅 
 # ==========================================
 daily_to_sub = {}
 sub_to_daily = {}
@@ -289,11 +291,11 @@ def on_complete_button_click(s_id, p_id):
     st.session_state['active_proj_id'] = str(p_id)
 
 # ==========================================
-# 탭 1: 일과 관리 (복사 기능 추가)
+# 탭 1: 일과 관리
 # ==========================================
 with tabs[0]:
     st.header(f"📝 {t_str} {target_user} 업무 리스트" if target_user != "전체" else f"📝 {t_str} 전사 업무 리스트")
-    if not (u_role == "마스터" and target_user != u_name):
+    if not is_readonly:
         with st.expander("➕ 오늘의 업무 추가", expanded=not disable_edit):
             task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True, disabled=disable_edit)
             if task_type == "일반/데일리 업무":
@@ -321,7 +323,7 @@ with tabs[0]:
     st.divider()
     for i, row in enumerate(filtered_daily):
         r_id = row.get('id')
-        if not (u_role == "마스터" and target_user != u_name) and str(st.session_state.get('edit_d_id')) == str(r_id):
+        if not is_readonly and str(st.session_state.get('edit_d_id')) == str(r_id):
             with st.container(border=True):
                 e_name = st.text_area("업무명 수정", row.get('업무명') or '', height=80)
                 e_cat = st.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0)
@@ -360,11 +362,10 @@ with tabs[0]:
         if c3.checkbox("🚫제외", value=is_ex, key=f"dex_{r_id}", disabled=disable_edit) != is_ex:
             if not disable_edit: supabase.table('daily').update({"보고서제외": not is_ex}).eq('id', r_id).execute(); apply_changes()
             
-        if not (u_role == "마스터" and target_user != u_name):
+        if not is_readonly:
             if c4.button("✏수정", key=f"ded_{r_id}", disabled=disable_edit): st.session_state['edit_d_id'] = r_id; st.rerun()
             if c5.button("🗑삭제", key=f"ddl_{r_id}", disabled=disable_edit): supabase.table('daily').delete().eq('id', r_id).execute(); apply_changes()
             
-            # 💡 [요청사항 5,6,7] 일일업무에서 이슈 게시판으로 복사
             with c6.popover("➡️ 이슈복사"):
                 sel_issue = st.selectbox("복사할 게시판 선택", ["세금계산서", "분납서", "보증보험"])
                 if st.button("복사하기", key=f"cpy_{r_id}"):
@@ -379,7 +380,7 @@ with tabs[0]:
     st.subheader(f"📌 {target_user} 데일리 고정 업무 (루틴)" if target_user != "전체" else "📌 전사 데일리 고정 업무 (루틴)")
     c_r1, c_r2 = st.columns([1, 1])
     with c_r1:
-        if not (u_role == "마스터" and target_user != u_name):
+        if not is_readonly:
             with st.form("add_routine_form", clear_on_submit=True):
                 r_task = st.text_input("새 데일리 업무명 등록", disabled=disable_edit)
                 r_cat = st.selectbox("분류", cat_list, disabled=disable_edit) 
@@ -392,7 +393,7 @@ with tabs[0]:
                 rr1, rr2 = st.columns([4, 1])
                 badge_r = f" [{r.get('담당자') or ''}]" if u_role == "마스터" and target_user == "전체" else ""
                 rr1.write(f"· [{r.get('분류')}] {r.get('업무명')}{badge_r}")
-                if not (u_role == "마스터" and target_user != u_name) and rr2.button("삭제", key=f"rdel_{r_id}", disabled=disable_edit):
+                if not is_readonly and rr2.button("삭제", key=f"rdel_{r_id}", disabled=disable_edit):
                     supabase.table('routines').delete().eq('id', r_id).execute(); apply_changes()
   
 # ==========================================
@@ -400,7 +401,7 @@ with tabs[0]:
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
-    if not (u_role == "마스터" and target_user != u_name):
+    if not is_readonly:
         with st.expander("✨ 신규 프로젝트 등록", expanded=False):
             with st.form("new_proj_form", clear_on_submit=True):
                 pc1, pc2 = st.columns(2)
@@ -439,7 +440,7 @@ with tabs[1]:
             p_ex = bool(p.get('보고서제외', False))
             if set_c3.checkbox("🚫 제외", value=p_ex, key=f"pex_{r_id}", disabled=disable_edit) != p_ex:
                 if not disable_edit: supabase.table('projects').update({"보고서제외": not p_ex}).eq('id', r_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
-            if not (u_role == "마스터" and target_user != u_name):
+            if not is_readonly:
                 with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
                     sc1, sc2 = st.columns([4,1])
                     new_sub = sc1.text_area("세부 업무 추가", height=80, disabled=disable_edit)
@@ -448,7 +449,7 @@ with tabs[1]:
             
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id')
-                if not (u_role == "마스터" and target_user != u_name) and str(st.session_state.get('edit_s_id')) == str(s_id):
+                if not is_readonly and str(st.session_state.get('edit_s_id')) == str(s_id):
                     with st.container(border=True):
                         e_s_name = st.text_area("세부업무명 수정", s.get('세부업무명') or '', height=80)
                         eb1, eb2, _ = st.columns([1, 1, 4])
@@ -476,11 +477,11 @@ with tabs[1]:
                 if sl5.checkbox("🚫출력제외", value=s_ex, key=f"s_ex_{s_id}", disabled=disable_edit) != s_ex:
                     if not disable_edit: supabase.table('sub_tasks').update({"보고서제외": not s_ex}).eq('id', s_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
                 
-                if not (u_role == "마스터" and target_user != u_name):
+                if not is_readonly:
                     if sl6.button("✏수정", key=f"sedt_{s_id}", disabled=disable_edit): st.session_state['edit_s_id'] = str(s_id); st.session_state['active_proj_id'] = str(r_id); st.rerun()
                     if sl7.button("🗑삭제", key=f"sdel_{s_id}", disabled=disable_edit): supabase.table('sub_tasks').delete().eq('id', s_id).execute(); st.session_state['active_proj_id'] = str(r_id); apply_changes()
             st.write("---")
-            if not (u_role == "마스터" and target_user != u_name):
+            if not is_readonly:
                 ac1, ac2 = st.columns([1,1])
                 can_archive = cur_end_str and t_str >= cur_end_str
                 if ac1.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=disable_edit or not can_archive):
@@ -508,9 +509,10 @@ with tabs[1]:
                 arc_c1.markdown(f"**[{arc_cat}]** <span style='color:#777; text-decoration: line-through;'>{arc_pn}</span>{arc_owner}", unsafe_allow_html=True)
                 arc_c2.write(f"완료일: {arc_end}")
 
-                if not (u_role == "마스터" and target_user != u_name):
+                if not is_readonly:
                     if arc_c3.button("🔄 복구", key=f"unarc_{arc_id}", disabled=disable_edit):
-                        supabase.table('projects').update({"보관함이동": False}).eq('id', arc_id).execute(); st.session_state['active_proj_id'] = arc_id; apply_changes()
+                        supabase.table('projects').update({"보관함이동": False}).eq('id', arc_id).execute()
+                        st.session_state['active_proj_id'] = arc_id; apply_changes()
                     if arc_c4.button("🗑 영구삭제", key=f"harddel_{arc_id}", disabled=disable_edit):
                         supabase.table('projects').delete().eq('id', arc_id).execute(); apply_changes()
 
@@ -547,14 +549,14 @@ if u_role == "마스터":
                 apply_changes()
 
 # ==========================================
-# 탭 4: 독립형 KPI 시스템
+# 탭 4: 전면 개편된 독립형 KPI 시스템
 # ==========================================
 with tab_kpi:
     def format_target(val, unit):
         try: v = int(val)
         except: v = val
-        if unit == "금액": return f"{v:,}원"
-        elif unit == "요율": return f"{v}%"
+        if unit == "금액(원)": return f"{v:,}원"
+        elif unit == "요율(%)": return f"{v}%"
         else: return f"{v}건"
 
     def calculate_kpi_score(target, submissions):
@@ -595,7 +597,8 @@ with tab_kpi:
         with mt1:
             st.subheader("대기 중인 확인 요청")
             pending_reqs = [s for s in kpi_subs if s.get('status') == '대기']
-            if not pending_reqs: st.info("현재 승인 대기 중인 증빙 자료가 없습니다.")
+            if not pending_reqs:
+                st.info("현재 승인 대기 중인 증빙 자료가 없습니다.")
             else:
                 for p in pending_reqs:
                     t_info = next((t for t in kpi_targets if str(t.get('id')) == str(p.get('kpi_id'))), {'kpi_name': '삭제된 지표', 'owner': '알수없음'})
@@ -604,7 +607,7 @@ with tab_kpi:
                     if d_info: t_name += f" ➔ 🔹{d_info['detail_name']}"
                     
                     with st.container(border=True):
-                        st.markdown(f"**제출자:** {p['user_name']} | **지표:** {t_name} | **제출 기간/분류:** {p['period']}")
+                        st.markdown(f"**제출자:** {p['user_name']} | **지표:** {t_name} | **기간:** {p['period']}")
                         st.write(f"**증빙 내역:** {p['evidence']}")
                         ac1, ac2, _ = st.columns([1, 1, 6])
                         if ac1.button("✅ 승인", key=f"app_{p['id']}"):
@@ -621,8 +624,11 @@ with tab_kpi:
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
                 sc3_u, sc3_v, sc4, sc5 = st.columns([1, 1.5, 1, 1.5])
-                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율", "금액"])
-                t_count = sc3_v.number_input("목표 수치", min_value=0, value=14, step=1)
+                t_unit = sc3_u.selectbox("목표 단위", ["건", "요율(%)", "금액(원)"])
+                if t_unit == "금액(원)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=0, step=100000)
+                elif t_unit == "요율(%)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=100, step=5)
+                else: t_count = sc3_v.number_input("목표 수치", min_value=0, value=14, step=1)
+                
                 t_weight = sc4.number_input("배점", value=15)
                 t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
                 t_desc = st.text_area("산출식 및 배점 설명 (예: 누락 0건 15점)")
@@ -645,10 +651,14 @@ with tab_kpi:
                         cur_own = target.get('owner')
                         e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
                         ec3_u, ec3_v, ec4, ec5 = st.columns([1, 1.5, 1, 1.5])
-                        cur_unit = target.get('unit', '건수')
-                        unit_opts = ["건수", "요율", "금액"]
+                        cur_unit = target.get('unit', '건')
+                        unit_opts = ["건", "요율(%)", "금액(원)"]
                         e_unit = ec3_u.selectbox("목표 단위", unit_opts, index=unit_opts.index(cur_unit) if cur_unit in unit_opts else 0, key=f"eku_{t_id}_{i}")
-                        e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}")
+                        
+                        if e_unit == "금액(원)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
+                        elif e_unit == "요율(%)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
+                        else: e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
+                        
                         e_wgt = ec4.number_input("배점", value=int(target.get('weight') or 0), key=f"ekw_{t_id}_{i}")
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
                         e_desc = st.text_area("산출식", value=target.get('description') or '', key=f"ekd_{t_id}_{i}")
@@ -656,9 +666,10 @@ with tab_kpi:
                         if eb1.button("💾 메인 지표 저장", type="primary", key=f"esvk_{t_id}_{i}"):
                             supabase.table('kpi_targets').update({"kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "unit": e_unit, "weight": e_wgt, "cycle": e_cyc, "description": e_desc}).eq('id', t_id).execute()
                             st.session_state['edit_kpi_id'] = None; apply_changes()
-                        if eb2.button("취소", key=f"ecank_{t_id}_{i}"): st.session_state['edit_kpi_id'] = None; st.rerun()
+                        if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
+                            st.session_state['edit_kpi_id'] = None; st.rerun()
                 else:
-                    t_str_format = format_target(target.get('target_count', 0), target.get('unit', '건수'))
+                    t_str_format = format_target(target.get('target_count', 0), target.get('unit', '건'))
                     with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표: {t_str_format} / 배점: {target.get('weight')}점)"):
                         st.info(f"**📝 산출식 및 가이드:** {target.get('description', '설명글이 없습니다.')}")
                         st.markdown("**🔹 상세 업무(Sub-KPI) 할당 및 리스트**")
@@ -677,7 +688,8 @@ with tab_kpi:
                                     if edb1.button("💾 상세 저장", type="primary", key=f"edsave_{d_id}"):
                                         supabase.table('kpi_details').update({"detail_name": ed_name, "assignee": ed_assig, "cycle": ed_cycle, "description": ed_desc}).eq('id', d_id).execute()
                                         st.session_state['edit_detail_id'] = None; apply_changes()
-                                    if edb2.button("취소", key=f"edcan_{d_id}"): st.session_state['edit_detail_id'] = None; st.rerun()
+                                    if edb2.button("취소", key=f"edcan_{d_id}"):
+                                        st.session_state['edit_detail_id'] = None; st.rerun()
                             else:
                                 with st.container(border=True):
                                     dc1, dc2, dc3, dc4 = st.columns([4, 2, 0.8, 0.8])
@@ -713,12 +725,13 @@ with tab_kpi:
         my_personal = [t for t in kpi_targets if t.get('owner') == target_user]
         
         st.subheader("🏆 현재 스코어 보드")
-        if not my_common and not my_personal: st.info("할당된 KPI 지표가 없습니다.")
+        if not my_common and not my_personal:
+            st.info("할당된 KPI 지표가 없습니다.")
         else:
             all_my_targets = my_common + my_personal
             for t in all_my_targets:
                 app, tot, pts, rate, mis = calculate_kpi_score(t, kpi_subs)
-                t_unit = t.get('unit', '건수')
+                t_unit = t.get('unit', '건')
                 t_format = format_target(tot, t_unit)
                 
                 with st.container(border=True):
@@ -736,6 +749,7 @@ with tab_kpi:
                         st.success(f"**📊 달성 현황:** 달성률 {round(rate, 1)}% (내 승인 {app}건) ➔ **{pts}점 획득**")
 
         st.divider()
+        
         if not is_readonly:
             my_assigned_details = [d for d in kpi_details if d.get('assignee') == target_user]
             if my_assigned_details:
@@ -749,10 +763,13 @@ with tab_kpi:
             
             st.subheader("📤 증빙 자료 확인 요청")
             submit_options = []
-            for pt in my_personal: submit_options.append({"type": "personal", "target": pt, "detail": None, "label": f"[개인] {pt['kpi_name']}"})
+            for pt in my_personal:
+                submit_options.append({"type": "personal", "target": pt, "detail": None, "label": f"[개인] {pt['kpi_name']}"})
+            
             for md in my_assigned_details:
                 parent_t = next((t for t in kpi_targets if str(t['id']) == str(md['kpi_id'])), None)
-                if parent_t: submit_options.append({"type": "detail", "target": parent_t, "detail": md, "label": f"[공통] {parent_t['kpi_name']} ➔ {md['detail_name']}"})
+                if parent_t:
+                    submit_options.append({"type": "detail", "target": parent_t, "detail": md, "label": f"[공통] {parent_t['kpi_name']} ➔ {md['detail_name']}"})
             
             with st.form("kpi_submission_form", clear_on_submit=True):
                 s1, s2 = st.columns(2)
@@ -760,6 +777,7 @@ with tab_kpi:
                     sel_opt = s1.selectbox("할당된 지표 선택", submit_options, format_func=lambda x: x["label"])
                     sub_period = s2.text_input("실제 진행 분류/기간 (예: 1분기, 4월 15일 일계표)")
                     sub_evidence = st.text_area("증빙 내용 및 위치 (예: 그룹웨어 결재 번호 #1234)")
+                    
                     if st.form_submit_button("확인 요청 전송", type="primary"):
                         d_id = sel_opt['detail']['id'] if sel_opt['type'] == 'detail' else None
                         supabase.table('kpi_submissions').insert({
@@ -774,13 +792,15 @@ with tab_kpi:
         st.divider()
         st.subheader("📜 나의 제출 내역")
         my_history = [s for s in kpi_subs if s.get('user_name') == target_user]
-        if not my_history: st.info("제출된 증빙 내역이 없습니다.")
+        if not my_history:
+            st.info("제출된 증빙 내역이 없습니다.")
         else:
             for s in reversed(my_history):
                 t_info = next((t for t in kpi_targets if str(t.get('id')) == str(s.get('kpi_id'))), None)
                 d_info = next((d for d in kpi_details if str(d.get('id')) == str(s.get('detail_id'))), None)
                 t_name = f"[{t_info['owner']}] {t_info['kpi_name']}" if t_info else "삭제된 지표"
                 if d_info: t_name += f" ➔ 🔹{d_info['detail_name']}"
+                
                 status_color = "#1E88E5" if s['status'] == '대기' else "#43A047" if s['status'] == '승인' else "#E53935"
                 with st.container(border=True):
                     st.markdown(f"**{t_name}** | 기간: {s['period']} | 상태: <span style='color:{status_color}; font-weight:bold;'>{s['status']}</span>", unsafe_allow_html=True)
@@ -790,11 +810,11 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 엑셀 보고서 생성부 (요청사항 2,3,4,5,8 반영)
+# 탭 5: 엑셀 보고서 생성부 
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
-    if not (u_role == "마스터" and target_user != u_name):
+    if not is_readonly:
         with st.expander("🛠 등록된 전체 업무 일괄 수정"):
             t1, t2, t3 = st.tabs(["📝 일일 업무", "📁 프로젝트", "📋 하위 세부업무"])
             with t1: e_d_df = st.data_editor(pd.DataFrame(all_daily), key="ed_d", use_container_width=True)
@@ -882,52 +902,39 @@ with tab_rep:
         s_w, e_w = c_ds1.date_input("시작일", today_kst - datetime.timedelta(days=7), key="ws"), c_ds2.date_input("종료일", today_kst, key="we")
         s_w_str, e_w_str = s_w.strftime("%Y-%m-%d"), e_w.strftime("%Y-%m-%d")
         
-        # [요청사항 4] 엑셀 전용 카테고리별 주간 고정 텍스트 입력창
         st.markdown("**📝 업무 분류별 주간 고정 내용 입력** (엑셀 출력용)")
         st.info("입력된 내용은 이번 엑셀 파일에만 포함되며, 데이터베이스에 영구 저장되지 않습니다.")
         
-        # [요청사항 3] 정렬 순서 강제
         excel_sort_order = ["경영", "재무", "입찰", "조달", "지원", "R&D", "현장", "요청사항"]
         fixed_notes = {}
         with st.expander("고정 내용 입력 열기"):
             for cat in excel_sort_order:
                 fixed_notes[cat] = st.text_area(f"[{cat}] 주간 고정 내용", key=f"fn_{cat}")
         
-        # 1) 데일리 업무 수집 (이슈 복사된 항목 제외)
         daily_period = [d for d in all_daily if s_w_str <= str(d.get('날짜') or '') <= e_w_str and (target_user == "전체" or d.get('담당자') == target_user) and not bool(d.get('보고서제외', False)) and str(d.get('프로젝트연동') or 'FALSE').upper() != "TRUE" and not bool(d.get('is_copied', False))]
-        
-        # 2) 프로젝트 업무 수집
         rep_proj = [p for p in proj_data if (target_user == "전체" or p.get('담당자') == target_user) and not bool(p.get('보관함이동', False)) and not bool(p.get('보고서제외', False))]
-        
-        # 3) 루틴 수집
         routines_period = [r for r in routine_data if (target_user == "전체" or r.get('담당자') == target_user)]
-        
-        # 4) 금주 이슈 수집 (shared_boards)
         current_issues = [b for b in shared_boards if b.get('week_start') == current_monday_str]
         
         excel_data = {cat: [] for cat in excel_sort_order}
-        excel_data['기타'] = [] # 정렬에 없는 분류 방어용
+        excel_data['기타'] = []
         
-        # Helper: 키워드 기반 분류 매칭
         def match_category(cat_str):
             for sort_cat in excel_sort_order:
                 if sort_cat in cat_str: return sort_cat
             return '기타'
         
-        # 데일리 먼저 삽입 (우선순위)
         for d in daily_period:
             matched_cat = match_category(d.get('분류') or '기타')
             t_n = str(d.get('업무명') or '').replace(chr(10), '<br>')
             prog = int(str(d.get('진행률') or '0'))
             excel_data[matched_cat].append({'type': 'daily', 'content': f"· {t_n}", 'prog': prog, 'next': ''})
             
-        # 루틴 삽입
         for r in routines_period:
             matched_cat = match_category(r.get('분류') or '기타')
             t_n = str(r.get('업무명') or '').replace(chr(10), '<br>')
             excel_data[matched_cat].append({'type': 'routine', 'content': f"<b>[루틴]</b> {t_n}", 'prog': 100, 'next': ''})
             
-        # 프로젝트 삽입
         for p in rep_proj:
             matched_cat = match_category(p.get('분류') or '기타')
             pn = p.get('프로젝트명') or ''
@@ -943,7 +950,6 @@ with tab_rep:
             avg_p = int(total_p / len(valid_subs))
             excel_data[matched_cat].append({'type': 'project', 'content': ph, 'prog': avg_p, 'next': ''})
 
-        # 공유 이슈 삽입 (요청사항, 세금계산서, 분납서, 보증보험)
         for issue in current_issues:
             b_type = issue.get('board_type')
             c_text = str(issue.get('content')).replace(chr(10), '<br>')
@@ -956,16 +962,13 @@ with tab_rep:
             elif b_type in ['분납서', '보증보험']:
                 excel_data['현장'].append({'type': 'issue', 'content': f"· <b>[{b_type}]</b> {c_text}{status_text}", 'prog': prog, 'next': ''})
         
-        # HTML 렌더링
         xls_hr = ""
         for cat in excel_sort_order + ['기타']:
             items = excel_data[cat]
             f_note = fixed_notes.get(cat, "").replace('\n', '<br>')
             
-            # 항목이 없더라도 고정 텍스트가 있으면 출력
             if not items and not f_note: continue
             
-            # 해당 카테고리의 첫번째 줄에만 분류명을 합쳐서 병합하는 형태 대신 심플하게 구성
             cat_html = f"<b>{cat}</b>"
             if f_note: cat_html += f"<br><br><span style='color:#0066cc; font-size:0.9em;'>[주간고정]<br>{f_note}</span>"
             
@@ -973,17 +976,13 @@ with tab_rep:
             if not items: content_html = "특이사항 없음"
             else:
                 for it in items:
-                    # 데일리/이슈는 진행률을 따로 표기, 프로젝트는 자체 내용에 진행률 포함
                     p_str = f" ({it['prog']}%)" if it['type'] in ['daily', 'issue'] else ""
                     content_html += f"<div style='margin-bottom:8px;'>{it['content']}{p_str}</div>"
             
-            # 카테고리 전체 평균 진행률 (대략적)
             cat_prog = int(sum(it['prog'] for it in items) / len(items)) if items else 100
-            
             xls_hr += f"<tr><td style='vertical-align: top; {font_css}'>{cat_html}</td><td style='vertical-align: top; {font_css}'>{content_html}</td><td style='text-align:center; vertical-align: top; {font_css}'><b>{cat_prog}%</b></td><td style='{font_css}'></td></tr>"
             
         th = f"<tr><th style='background:#e0f7fa; padding:8px; width:15%; {font_css}'>업무분류</th><th style='background:#e0f7fa; padding:8px; width:50%; {font_css}'>지난주진행업무 ({s_w_str} ~ {e_w_str})</th><th style='background:#e0f7fa; padding:8px; width:10%; {font_css}'>진행률</th><th style='background:#e0f7fa; padding:8px; width:25%; {font_css}'>금주예정업무</th></tr>"
-        # 💡 [요청사항 5] 엑셀 타이틀
         xls_html = f"<html><head><meta charset='utf-8'></head><body><h2 style='text-align:center; {font_css}'>◎경영지원부 주간 보고◎</h2><table border='1' style='border-collapse:collapse; width:100%; border: 1px solid #ccc;'>{th}{xls_hr}</table></body></html>"
         
         st.download_button("💾 주간 보고서 (Excel) 다운로드", xls_html.encode('utf-8-sig'), f"[주간보고]경영지원부_{s_w}_{e_w}.xls")
