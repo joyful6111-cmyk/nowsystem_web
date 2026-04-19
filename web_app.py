@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V45", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V46", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -62,6 +62,8 @@ if 'active_proj_id' not in st.session_state: st.session_state['active_proj_id'] 
 if 'edit_d_id' not in st.session_state: st.session_state['edit_d_id'] = None
 if 'edit_s_id' not in st.session_state: st.session_state['edit_s_id'] = None
 if 'edit_kpi_id' not in st.session_state: st.session_state['edit_kpi_id'] = None
+# 💡 상세 지표 수정을 위한 세션 키 추가
+if 'edit_detail_id' not in st.session_state: st.session_state['edit_detail_id'] = None
 
 def check_login(user_id, user_pw):
     _, _, _, _, users, _, _, _, _ = load_db_data()
@@ -195,7 +197,7 @@ for s in sub_data:
     if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 💡 [버그픽스 유지] 자동 동기화용 콜백 함수 세팅
+# 💡 자동 동기화용 콜백 함수 세팅
 # ==========================================
 daily_to_sub = {}
 sub_to_daily = {}
@@ -312,7 +314,6 @@ with tabs[0]:
         if str(row.get('프로젝트연동')).upper() == "TRUE": c1.markdown(f"**[{row.get('분류')}]** <span style='color:#555;'>{str(row.get('연결프로젝트')).replace('::', ' > ')}</span>{carry_txt}{badge}", unsafe_allow_html=True)
         else: c1.markdown(f"**[{row.get('분류')}]** {str(row.get('업무명') or '').replace(chr(10), '<br>')}{carry_txt}{badge}", unsafe_allow_html=True)
         
-        # 💡 [콜백 적용 유지]
         cur_p = int(str(row.get('진행률') or '0')) if str(row.get('진행률') or '0').isdigit() else 0
         c2.slider("진행", 0, 100, cur_p, 10, key=f"ds_{r_id}", on_change=on_daily_slider_change, args=(r_id, d_date, t_str), label_visibility="collapsed", disabled=disable_edit)
             
@@ -370,6 +371,7 @@ with tabs[1]:
         pn = p.get("프로젝트명") or ""
         owner = f" ({p.get('담당자') or ''})" if u_role == "마스터" and target_user == "전체" else ""
         my_s_list = sub_dict.get(pn, [])
+        
         total_p = sum(int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0 for s in my_s_list)
         avg_p = int(total_p / len(my_s_list)) if len(my_s_list) > 0 else 0
         
@@ -415,7 +417,6 @@ with tabs[1]:
                 sl1, sl2, sl3, sl4, sl5, sl6, sl7 = st.columns([2.5, 2.0, 1.2, 1.4, 1.3, 0.9, 0.9])
                 sl1.markdown(f"· {str(s.get('세부업무명') or '').replace('\n','<br>')}", unsafe_allow_html=True)
                 
-                # 💡 [콜백 적용 유지]
                 cur_sp = int(str(s.get('진행률') or '0')) if str(s.get('진행률') or '0').isdigit() else 0
                 sl2.slider("진행", 0, 100, cur_sp, 10, key=f"s_sld_{s_id}", on_change=on_sub_slider_change, args=(s_id, r_id), label_visibility="collapsed", disabled=disable_edit)
                 sl3.button("✅완료", key=f"sdone_{s_id}", on_click=on_complete_button_click, args=(s_id, r_id), disabled=disable_edit)
@@ -500,7 +501,7 @@ if u_role == "마스터":
                 apply_changes()
 
 # ==========================================
-# 탭 4: 전면 개편된 독립형 KPI 시스템 (목표수치, 주기, 설명 추가 반영)
+# 탭 4: 전면 개편된 독립형 KPI 시스템 (상세 수정 기능 완벽 보강)
 # ==========================================
 with tab_kpi:
     def calculate_kpi_score(target, submissions):
@@ -568,7 +569,6 @@ with tab_kpi:
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
                 sc3, sc4, sc5 = st.columns([1, 1, 1.5])
-                # 💡 [요청사항 1] 목표 건수를 금액으로도 인지할 수 있도록 텍스트 수정
                 t_count = sc3.number_input("전체 대상 (건수/일수/금액)", min_value=0, value=14)
                 t_weight = sc4.number_input("배점", value=15)
                 t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
@@ -585,6 +585,7 @@ with tab_kpi:
             if not kpi_targets: st.info("등록된 지표가 없습니다.")
             for i, target in enumerate(kpi_targets):
                 t_id = target.get('id')
+                # 💡 메인 지표 수정 폼
                 if str(st.session_state.get('edit_kpi_id')) == str(t_id):
                     with st.container(border=True):
                         ec1, ec2 = st.columns(2)
@@ -597,7 +598,7 @@ with tab_kpi:
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
                         e_desc = st.text_area("산출식", value=target.get('description') or '', key=f"ekd_{t_id}_{i}")
                         eb1, eb2, _ = st.columns([1, 1, 4])
-                        if eb1.button("💾 저장", type="primary", key=f"esvk_{t_id}_{i}"):
+                        if eb1.button("💾 메인 지표 저장", type="primary", key=f"esvk_{t_id}_{i}"):
                             supabase.table('kpi_targets').update({"kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "weight": e_wgt, "cycle": e_cyc, "description": e_desc}).eq('id', t_id).execute()
                             st.session_state['edit_kpi_id'] = None; apply_changes()
                         if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
@@ -609,15 +610,33 @@ with tab_kpi:
                         
                         details_for_this = [d for d in kpi_details if str(d.get('kpi_id')) == str(t_id)]
                         for d in details_for_this:
-                            with st.container(border=True):
-                                dc1, dc2, dc3 = st.columns([5, 3, 1])
-                                dc1.write(f"**{d.get('detail_name')}** (주기: {d.get('cycle', '미지정')})")
-                                dc1.caption(f"설명: {d.get('description', '')}")
-                                dc2.write(f"👤 담당: {d.get('assignee')}")
-                                if dc3.button("삭제", key=f"del_det_{d.get('id')}"):
-                                    supabase.table('kpi_details').delete().eq('id', d.get('id')).execute(); apply_changes()
+                            d_id = d.get('id')
+                            # 💡 [요청사항 반영] 상세 지표 개별 수정 폼
+                            if str(st.session_state.get('edit_detail_id')) == str(d_id):
+                                with st.container(border=True):
+                                    edc1, edc2, edc3 = st.columns([4, 2, 2])
+                                    ed_name = edc1.text_input("상세 업무명", value=d.get('detail_name'), key=f"edn_{d_id}")
+                                    ed_assig = edc2.selectbox("담당자", all_users, index=all_users.index(d.get('assignee')) if d.get('assignee') in all_users else 0, key=f"eda_{d_id}")
+                                    ed_cycle = edc3.text_input("주기", value=d.get('cycle') or '', key=f"edc_{d_id}")
+                                    ed_desc = st.text_area("상세 설명", value=d.get('description') or '', key=f"edd_{d_id}")
+                                    
+                                    edb1, edb2, _ = st.columns([1, 1, 4])
+                                    if edb1.button("💾 상세 저장", type="primary", key=f"edsave_{d_id}"):
+                                        supabase.table('kpi_details').update({"detail_name": ed_name, "assignee": ed_assig, "cycle": ed_cycle, "description": ed_desc}).eq('id', d_id).execute()
+                                        st.session_state['edit_detail_id'] = None; apply_changes()
+                                    if edb2.button("취소", key=f"edcan_{d_id}"):
+                                        st.session_state['edit_detail_id'] = None; st.rerun()
+                            else:
+                                with st.container(border=True):
+                                    dc1, dc2, dc3, dc4 = st.columns([4, 2, 0.8, 0.8])
+                                    dc1.write(f"**{d.get('detail_name')}** (주기: {d.get('cycle', '미지정')})")
+                                    dc1.caption(f"설명: {d.get('description', '')}")
+                                    dc2.write(f"👤 담당: {d.get('assignee')}")
+                                    if dc3.button("✏️ 수정", key=f"edit_det_{d_id}"):
+                                        st.session_state['edit_detail_id'] = d_id; st.rerun()
+                                    if dc4.button("🗑 삭제", key=f"del_det_{d_id}"):
+                                        supabase.table('kpi_details').delete().eq('id', d_id).execute(); apply_changes()
                         
-                        # 💡 [요청사항 2] 상세 업무 등록 시 주기 및 설명글 추가 폼
                         with st.form(key=f"add_det_{t_id}", clear_on_submit=True):
                             st.markdown("**새로운 상세 업무 할당**")
                             c_n, c_a, c_c = st.columns([4, 2, 2])
@@ -634,9 +653,9 @@ with tab_kpi:
                                     apply_changes()
                         
                         st.markdown("---")
-                        b1, b2, _ = st.columns([1, 1, 6])
-                        if b1.button("✏ 메인 지표 수정", key=f"kedt_{t_id}_{i}"): st.session_state['edit_kpi_id'] = t_id; st.rerun()
-                        if b2.button("🗑 메인 지표 삭제", key=f"kdel_{t_id}_{i}"): supabase.table('kpi_targets').delete().eq('id', t_id).execute(); apply_changes()
+                        b1, b2, _ = st.columns([1.5, 1.5, 5])
+                        if b1.button("✏ 메인 지표 전체수정", key=f"kedt_{t_id}_{i}"): st.session_state['edit_kpi_id'] = t_id; st.rerun()
+                        if b2.button("🗑 메인 지표 완전삭제", key=f"kdel_{t_id}_{i}"): supabase.table('kpi_targets').delete().eq('id', t_id).execute(); apply_changes()
 
     else:
         st.header(f"📈 {target_user} KPI 달성 현황 및 증빙 제출")
@@ -659,7 +678,6 @@ with tab_kpi:
 
         st.divider()
         
-        # 💡 [요청사항 2] 실무자가 상세 할당된 업무의 주기와 설명을 볼 수 있도록 가이드 추가
         if not is_readonly:
             my_assigned_details = [d for d in kpi_details if d.get('assignee') == target_user]
             if my_assigned_details:
