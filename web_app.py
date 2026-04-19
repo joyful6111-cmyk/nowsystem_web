@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V52", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V53", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -32,7 +32,7 @@ except Exception as e:
     st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 실시간 반영을 위해 캐시 완전 제거됨 (신규 테이블 포함)
+# 💡 [버그 픽스] fixed_contents 테이블 로드 추가 완료
 def load_db_data():
     try:
         daily = supabase.table('daily').select("*").execute().data or []
@@ -45,11 +45,12 @@ def load_db_data():
         kpi_details = supabase.table('kpi_details').select("*").execute().data or []
         kpi_submissions = supabase.table('kpi_submissions').select("*").execute().data or []
         shared_boards = supabase.table('shared_boards').select("*").execute().data or []
+        fixed_contents = supabase.table('fixed_contents').select("*").execute().data or []
         
-        return daily, projects, sub_tasks, routines, users, categories, kpi_targets, kpi_details, kpi_submissions, shared_boards
+        return daily, projects, sub_tasks, routines, users, categories, kpi_targets, kpi_details, kpi_submissions, shared_boards, fixed_contents
     except Exception as e:
         st.warning(f"데이터 로드 실패: {e}")
-        return [], [], [], [], [], [], [], [], [], []
+        return [], [], [], [], [], [], [], [], [], [], []
 
 def apply_changes():
     st.rerun()
@@ -66,7 +67,7 @@ if 'edit_board_id' not in st.session_state: st.session_state['edit_board_id'] = 
 if 'active_modal_board' not in st.session_state: st.session_state['active_modal_board'] = None
 
 def check_login(user_id, user_pw):
-    _, _, _, _, users, _, _, _, _, _ = load_db_data()
+    _, _, _, _, users, _, _, _, _, _, _ = load_db_data()
     for u in users:
         if str(u.get('아이디') or '') == str(user_id) and str(u.get('비밀번호') or '') == str(user_pw):
             st.session_state['logged_in'] = True
@@ -105,7 +106,7 @@ u_name = u_info.get('이름') or '사용자'
 u_role = u_info.get('권한') or '일반'
 
 # --- [데이터 할당 및 정렬] ---
-all_daily, proj_data, sub_data, routine_data, user_data, cat_data, kpi_targets, kpi_details, kpi_subs, shared_boards = load_db_data()
+all_daily, proj_data, sub_data, routine_data, user_data, cat_data, kpi_targets, kpi_details, kpi_subs, shared_boards, fixed_contents = load_db_data()
 
 proj_data = sorted(proj_data, key=lambda x: (int(x.get('정렬순서') or 999), int(x.get('id') or 0)))
 sub_data = sorted(sub_data, key=lambda x: int(x.get('id') or 0))
@@ -131,6 +132,12 @@ def render_shared_board_full_width(board_type, title, is_weekly=False):
         st.rerun()
         
     st.header(title)
+    
+    # 안내문구 출력
+    notice = "- 해당 게시판은 공용으로 사용하는 게시판입니다.\n"
+    if board_type in ["세금계산서", "분납서", "보증보험"]:
+        notice += "- 다음주 월요일이면 지난주 내용이 자동 삭제됩니다.\n- 해당 게시판은 일일업무 등록 시 연동으로 등록이 가능합니다."
+    st.info(notice)
     st.divider()
     
     boards = [b for b in shared_boards if b.get('board_type') == board_type]
@@ -270,7 +277,7 @@ for s in sub_data:
     if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 💡 자동 동기화용 콜백 함수 세팅
+# 💡 콜백 함수 세팅 
 # ==========================================
 daily_to_sub = {}
 sub_to_daily = {}
@@ -349,17 +356,14 @@ with tabs[0]:
     st.divider()
     for i, row in enumerate(filtered_daily):
         r_id = row.get('id')
-        
         if not is_readonly and str(st.session_state.get('edit_d_id')) == str(r_id):
             with st.container(border=True):
                 e_name = st.text_area("업무명 수정", row.get('업무명') or '', height=80, key=f"ed_name_{r_id}")
                 e_cat = st.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0, key=f"ed_cat_{r_id}")
                 eb1, eb2, _ = st.columns([1, 1, 4])
-                
                 if eb1.button("저장", type="primary", key=f"esv_{r_id}"):
                     is_proj_task = str(row.get('프로젝트연동') or 'FALSE').upper() == "TRUE"
                     old_p_info = str(row.get('연결프로젝트') or '')
-                    
                     if is_proj_task and "::" in old_p_info:
                         p_n, old_s_n = old_p_info.split("::", 1)
                         new_p_info = f"{p_n}::{e_name}"
@@ -370,9 +374,7 @@ with tabs[0]:
                         for d in all_daily:
                             if str(d.get('연결프로젝트') or '') == old_p_info:
                                 supabase.table('daily').update({"연결프로젝트": new_p_info, "업무명": e_name, "분류": e_cat}).eq('id', d.get('id')).execute()
-                    else:
-                        supabase.table('daily').update({"업무명": e_name, "분류": e_cat}).eq('id', r_id).execute()
-                        
+                    else: supabase.table('daily').update({"업무명": e_name, "분류": e_cat}).eq('id', r_id).execute()
                     st.session_state['edit_d_id'] = None; apply_changes()
                 if eb2.button("취소", key=f"ecan_{r_id}"): st.session_state['edit_d_id'] = None; st.rerun()
             continue
@@ -398,7 +400,7 @@ with tabs[0]:
             if c5.button("🗑삭제", key=f"ddl_{r_id}", disabled=disable_edit): supabase.table('daily').delete().eq('id', r_id).execute(); apply_changes()
             
             with c6.popover("➡️ 이슈복사"):
-                sel_issue = st.selectbox("복사할 게시판 선택", ["세금계산서", "분납서", "보증보험"], key=f"sel_issue_{r_id}")
+                sel_issue = st.selectbox("복사할 게시판 선택", ["요청사항", "세금계산서", "분납서", "보증보험"], key=f"sel_issue_{r_id}")
                 if st.button("복사하기", key=f"cpy_{r_id}"):
                     supabase.table('shared_boards').insert({
                         "board_type": sel_issue, "content": f"[{row.get('분류')}] {task_title}", 
@@ -473,7 +475,6 @@ with tabs[1]:
                 if not disable_edit: supabase.table('projects').update({"보고서제외": not p_ex}).eq('id', r_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
             if not is_readonly:
                 with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
-                    # 💡 [버그픽스] 컬럼 스플릿 복원 완료
                     sc1, sc2 = st.columns([4,1])
                     new_sub = sc1.text_area("세부 업무 추가", height=80, disabled=disable_edit, key=f"new_sub_{r_id}")
                     if sc2.form_submit_button("추가", disabled=disable_edit) and new_sub:
@@ -587,8 +588,8 @@ with tab_kpi:
     def format_target(val, unit):
         try: v = int(val)
         except: v = val
-        if unit == "금액": return f"{v:,}원"
-        elif unit == "요율": return f"{v}%"
+        if unit == "금액(원)": return f"{v:,}원"
+        elif unit == "요율(%)": return f"{v}%"
         else: return f"{v}건"
 
     def calculate_kpi_score(target, submissions):
@@ -656,14 +657,10 @@ with tab_kpi:
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
                 sc3_u, sc3_v, sc4, sc5 = st.columns([1, 1.5, 1, 1.5])
-                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율", "금액"])
-                
-                if t_unit == "금액":
-                    t_count = sc3_v.number_input("목표 수치 (단위: 원)", min_value=0, value=0, step=100000)
-                elif t_unit == "요율":
-                    t_count = sc3_v.number_input("목표 수치 (단위: %)", min_value=0, value=100, step=5)
-                else:
-                    t_count = sc3_v.number_input("목표 수치 (단위: 건)", min_value=0, value=14, step=1)
+                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율(%)", "금액(원)"])
+                if t_unit == "금액(원)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=0, step=100000)
+                elif t_unit == "요율(%)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=100, step=5)
+                else: t_count = sc3_v.number_input("목표 수치", min_value=0, value=14, step=1)
                 
                 t_weight = sc4.number_input("배점", value=15)
                 t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
@@ -688,12 +685,12 @@ with tab_kpi:
                         e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
                         ec3_u, ec3_v, ec4, ec5 = st.columns([1, 1.5, 1, 1.5])
                         cur_unit = target.get('unit', '건수')
-                        unit_opts = ["건수", "요율", "금액"]
+                        unit_opts = ["건수", "요율(%)", "금액(원)"]
                         e_unit = ec3_u.selectbox("목표 단위", unit_opts, index=unit_opts.index(cur_unit) if cur_unit in unit_opts else 0, key=f"eku_{t_id}_{i}")
                         
-                        if e_unit == "금액": e_cnt = ec3_v.number_input("목표 수치 (원)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
-                        elif e_unit == "요율": e_cnt = ec3_v.number_input("목표 수치 (%)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
-                        else: e_cnt = ec3_v.number_input("목표 수치 (건)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
+                        if e_unit == "금액(원)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
+                        elif e_unit == "요율(%)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
+                        else: e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
                         
                         e_wgt = ec4.number_input("배점", value=int(target.get('weight') or 0), key=f"ekw_{t_id}_{i}")
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
@@ -851,7 +848,7 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 데이터/보고서 (엑셀 고정 텍스트 반영)
+# 탭 5: 데이터/보고서 전용
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
