@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V49", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V50", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -159,7 +159,8 @@ def render_shared_board(board_type, title, is_weekly=False):
                             supabase.table('shared_boards').delete().eq('id', b_id).execute(); apply_changes()
 
         with st.form(f"form_{board_type}", clear_on_submit=True):
-            new_content = st.text_area("새 내용 작성", placeholder="내용을 입력하세요")
+            # 💡 [버그 픽스] form 내부 위젯에 고유 key 추가
+            new_content = st.text_area("새 내용 작성", placeholder="내용을 입력하세요", key=f"new_content_{board_type}")
             if st.form_submit_button("등록", type="primary") and new_content:
                 supabase.table('shared_boards').insert({
                     "board_type": board_type, "content": new_content, "author": u_name, 
@@ -190,7 +191,6 @@ with st.sidebar:
     if lock_key not in st.session_state: st.session_state[lock_key] = False
     is_locked = st.session_state[lock_key]
     
-    # 💡 [버그 픽스] 누락된 is_readonly 변수 복원
     is_readonly = (u_role == "마스터" and target_user != u_name)
     disable_edit = is_locked or is_readonly
   
@@ -244,7 +244,7 @@ for s in sub_data:
     if pn in sub_dict: sub_dict[pn].append(s)
 
 # ==========================================
-# 💡 콜백 함수 세팅 
+# 💡 콜백 함수 세팅 (기존 유지)
 # ==========================================
 daily_to_sub = {}
 sub_to_daily = {}
@@ -291,11 +291,11 @@ def on_complete_button_click(s_id, p_id):
     st.session_state['active_proj_id'] = str(p_id)
 
 # ==========================================
-# 탭 1: 일과 관리
+# 탭 1: 일과 관리 
 # ==========================================
 with tabs[0]:
     st.header(f"📝 {t_str} {target_user} 업무 리스트" if target_user != "전체" else f"📝 {t_str} 전사 업무 리스트")
-    if not is_readonly:
+    if not (u_role == "마스터" and target_user != u_name):
         with st.expander("➕ 오늘의 업무 추가", expanded=not disable_edit):
             task_type = st.radio("업무 종류 선택", ["일반/데일리 업무", "프로젝트 연동 업무"], horizontal=True, disabled=disable_edit)
             if task_type == "일반/데일리 업무":
@@ -323,10 +323,11 @@ with tabs[0]:
     st.divider()
     for i, row in enumerate(filtered_daily):
         r_id = row.get('id')
-        if not is_readonly and str(st.session_state.get('edit_d_id')) == str(r_id):
+        if not (u_role == "마스터" and target_user != u_name) and str(st.session_state.get('edit_d_id')) == str(r_id):
             with st.container(border=True):
-                e_name = st.text_area("업무명 수정", row.get('업무명') or '', height=80)
-                e_cat = st.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0)
+                # 💡 [버그 픽스] 수정 폼 위젯에 고유 key 추가
+                e_name = st.text_area("업무명 수정", row.get('업무명') or '', height=80, key=f"ed_name_{r_id}")
+                e_cat = st.selectbox("분류", cat_list, index=cat_list.index(row.get('분류')) if row.get('분류') in cat_list else 0, key=f"ed_cat_{r_id}")
                 eb1, eb2, _ = st.columns([1, 1, 4])
                 if eb1.button("저장", type="primary", key=f"esv_{r_id}"):
                     is_proj_task = str(row.get('프로젝트연동') or 'FALSE').upper() == "TRUE"
@@ -362,12 +363,13 @@ with tabs[0]:
         if c3.checkbox("🚫제외", value=is_ex, key=f"dex_{r_id}", disabled=disable_edit) != is_ex:
             if not disable_edit: supabase.table('daily').update({"보고서제외": not is_ex}).eq('id', r_id).execute(); apply_changes()
             
-        if not is_readonly:
+        if not (u_role == "마스터" and target_user != u_name):
             if c4.button("✏수정", key=f"ded_{r_id}", disabled=disable_edit): st.session_state['edit_d_id'] = r_id; st.rerun()
             if c5.button("🗑삭제", key=f"ddl_{r_id}", disabled=disable_edit): supabase.table('daily').delete().eq('id', r_id).execute(); apply_changes()
             
             with c6.popover("➡️ 이슈복사"):
-                sel_issue = st.selectbox("복사할 게시판 선택", ["세금계산서", "분납서", "보증보험"])
+                # 💡 [버그 픽스] 이슈 복사 selectbox에 고유 key 추가
+                sel_issue = st.selectbox("복사할 게시판 선택", ["세금계산서", "분납서", "보증보험"], key=f"sel_issue_{r_id}")
                 if st.button("복사하기", key=f"cpy_{r_id}"):
                     supabase.table('shared_boards').insert({
                         "board_type": sel_issue, "content": f"[{row.get('분류')}] {task_title}", 
@@ -380,7 +382,7 @@ with tabs[0]:
     st.subheader(f"📌 {target_user} 데일리 고정 업무 (루틴)" if target_user != "전체" else "📌 전사 데일리 고정 업무 (루틴)")
     c_r1, c_r2 = st.columns([1, 1])
     with c_r1:
-        if not is_readonly:
+        if not (u_role == "마스터" and target_user != u_name):
             with st.form("add_routine_form", clear_on_submit=True):
                 r_task = st.text_input("새 데일리 업무명 등록", disabled=disable_edit)
                 r_cat = st.selectbox("분류", cat_list, disabled=disable_edit) 
@@ -393,7 +395,7 @@ with tabs[0]:
                 rr1, rr2 = st.columns([4, 1])
                 badge_r = f" [{r.get('담당자') or ''}]" if u_role == "마스터" and target_user == "전체" else ""
                 rr1.write(f"· [{r.get('분류')}] {r.get('업무명')}{badge_r}")
-                if not is_readonly and rr2.button("삭제", key=f"rdel_{r_id}", disabled=disable_edit):
+                if not (u_role == "마스터" and target_user != u_name) and rr2.button("삭제", key=f"rdel_{r_id}", disabled=disable_edit):
                     supabase.table('routines').delete().eq('id', r_id).execute(); apply_changes()
   
 # ==========================================
@@ -401,7 +403,7 @@ with tabs[0]:
 # ==========================================
 with tabs[1]:
     st.header("📁 프로젝트 현황")
-    if not is_readonly:
+    if not (u_role == "마스터" and target_user != u_name):
         with st.expander("✨ 신규 프로젝트 등록", expanded=False):
             with st.form("new_proj_form", clear_on_submit=True):
                 pc1, pc2 = st.columns(2)
@@ -440,18 +442,19 @@ with tabs[1]:
             p_ex = bool(p.get('보고서제외', False))
             if set_c3.checkbox("🚫 제외", value=p_ex, key=f"pex_{r_id}", disabled=disable_edit) != p_ex:
                 if not disable_edit: supabase.table('projects').update({"보고서제외": not p_ex}).eq('id', r_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
-            if not is_readonly:
+            if not (u_role == "마스터" and target_user != u_name):
                 with st.form(key=f"sub_form_{r_id}", clear_on_submit=True):
-                    sc1, sc2 = st.columns([4,1])
-                    new_sub = sc1.text_area("세부 업무 추가", height=80, disabled=disable_edit)
+                    # 💡 [버그 픽스] form 내부 위젯에 고유 key 추가
+                    new_sub = sc1.text_area("세부 업무 추가", height=80, disabled=disable_edit, key=f"new_sub_{r_id}")
                     if sc2.form_submit_button("추가", disabled=disable_edit) and new_sub:
                         supabase.table('sub_tasks').insert({"프로젝트명": pn, "세부업무명": new_sub, "진행률": 0, "담당자": target_user, "보고서제외": False, "진행중": False}).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
             
             for j, s in enumerate(my_s_list):
                 s_id = s.get('id')
-                if not is_readonly and str(st.session_state.get('edit_s_id')) == str(s_id):
+                if not (u_role == "마스터" and target_user != u_name) and str(st.session_state.get('edit_s_id')) == str(s_id):
                     with st.container(border=True):
-                        e_s_name = st.text_area("세부업무명 수정", s.get('세부업무명') or '', height=80)
+                        # 💡 [버그 픽스] 세부업무명 수정 위젯에 고유 key 추가
+                        e_s_name = st.text_area("세부업무명 수정", s.get('세부업무명') or '', height=80, key=f"e_s_name_{s_id}")
                         eb1, eb2, _ = st.columns([1, 1, 4])
                         if eb1.button("저장", type="primary", key=f"esv_s_{s_id}"):
                             supabase.table('sub_tasks').update({"세부업무명": e_s_name}).eq('id', s_id).execute()
@@ -477,11 +480,11 @@ with tabs[1]:
                 if sl5.checkbox("🚫출력제외", value=s_ex, key=f"s_ex_{s_id}", disabled=disable_edit) != s_ex:
                     if not disable_edit: supabase.table('sub_tasks').update({"보고서제외": not s_ex}).eq('id', s_id).execute(); st.session_state['active_proj_id'] = r_id; apply_changes()
                 
-                if not is_readonly:
+                if not (u_role == "마스터" and target_user != u_name):
                     if sl6.button("✏수정", key=f"sedt_{s_id}", disabled=disable_edit): st.session_state['edit_s_id'] = str(s_id); st.session_state['active_proj_id'] = str(r_id); st.rerun()
                     if sl7.button("🗑삭제", key=f"sdel_{s_id}", disabled=disable_edit): supabase.table('sub_tasks').delete().eq('id', s_id).execute(); st.session_state['active_proj_id'] = str(r_id); apply_changes()
             st.write("---")
-            if not is_readonly:
+            if not (u_role == "마스터" and target_user != u_name):
                 ac1, ac2 = st.columns([1,1])
                 can_archive = cur_end_str and t_str >= cur_end_str
                 if ac1.button("📦 보관함 이동", key=f"arc_{r_id}", disabled=disable_edit or not can_archive):
@@ -509,7 +512,7 @@ with tabs[1]:
                 arc_c1.markdown(f"**[{arc_cat}]** <span style='color:#777; text-decoration: line-through;'>{arc_pn}</span>{arc_owner}", unsafe_allow_html=True)
                 arc_c2.write(f"완료일: {arc_end}")
 
-                if not is_readonly:
+                if not (u_role == "마스터" and target_user != u_name):
                     if arc_c3.button("🔄 복구", key=f"unarc_{arc_id}", disabled=disable_edit):
                         supabase.table('projects').update({"보관함이동": False}).eq('id', arc_id).execute()
                         st.session_state['active_proj_id'] = arc_id; apply_changes()
@@ -555,8 +558,8 @@ with tab_kpi:
     def format_target(val, unit):
         try: v = int(val)
         except: v = val
-        if unit == "금액(원)": return f"{v:,}원"
-        elif unit == "요율(%)": return f"{v}%"
+        if unit == "금액": return f"{v:,}원"
+        elif unit == "요율": return f"{v}%"
         else: return f"{v}건"
 
     def calculate_kpi_score(target, submissions):
@@ -607,7 +610,7 @@ with tab_kpi:
                     if d_info: t_name += f" ➔ 🔹{d_info['detail_name']}"
                     
                     with st.container(border=True):
-                        st.markdown(f"**제출자:** {p['user_name']} | **지표:** {t_name} | **기간:** {p['period']}")
+                        st.markdown(f"**제출자:** {p['user_name']} | **지표:** {t_name} | **제출 기간/분류:** {p['period']}")
                         st.write(f"**증빙 내역:** {p['evidence']}")
                         ac1, ac2, _ = st.columns([1, 1, 6])
                         if ac1.button("✅ 승인", key=f"app_{p['id']}"):
@@ -624,10 +627,14 @@ with tab_kpi:
                 t_owner = sc2.selectbox("적용 대상", ["공통"] + all_users)
                 
                 sc3_u, sc3_v, sc4, sc5 = st.columns([1, 1.5, 1, 1.5])
-                t_unit = sc3_u.selectbox("목표 단위", ["건", "요율(%)", "금액(원)"])
-                if t_unit == "금액(원)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=0, step=100000)
-                elif t_unit == "요율(%)": t_count = sc3_v.number_input("목표 수치", min_value=0, value=100, step=5)
-                else: t_count = sc3_v.number_input("목표 수치", min_value=0, value=14, step=1)
+                t_unit = sc3_u.selectbox("목표 단위", ["건수", "요율", "금액"])
+                
+                if t_unit == "금액":
+                    t_count = sc3_v.number_input("목표 수치 (단위: 원)", min_value=0, value=0, step=100000)
+                elif t_unit == "요율":
+                    t_count = sc3_v.number_input("목표 수치 (단위: %)", min_value=0, value=100, step=5)
+                else:
+                    t_count = sc3_v.number_input("목표 수치 (단위: 건)", min_value=0, value=14, step=1)
                 
                 t_weight = sc4.number_input("배점", value=15)
                 t_cycle = sc5.text_input("측정 주기 (예: 분기, 월)")
@@ -650,26 +657,30 @@ with tab_kpi:
                         e_name = ec1.text_input("KPI명", value=target.get('kpi_name'), key=f"ekn_{t_id}_{i}")
                         cur_own = target.get('owner')
                         e_own = ec2.selectbox("적용 대상", ["공통"] + all_users, index=(["공통"] + all_users).index(cur_own) if cur_own in ["공통"] + all_users else 0, key=f"eko_{t_id}_{i}")
+                        
                         ec3_u, ec3_v, ec4, ec5 = st.columns([1, 1.5, 1, 1.5])
-                        cur_unit = target.get('unit', '건')
-                        unit_opts = ["건", "요율(%)", "금액(원)"]
+                        cur_unit = target.get('unit', '건수')
+                        unit_opts = ["건수", "요율", "금액"]
                         e_unit = ec3_u.selectbox("목표 단위", unit_opts, index=unit_opts.index(cur_unit) if cur_unit in unit_opts else 0, key=f"eku_{t_id}_{i}")
                         
-                        if e_unit == "금액(원)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
-                        elif e_unit == "요율(%)": e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
-                        else: e_cnt = ec3_v.number_input("목표 수치", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
+                        if e_unit == "금액": e_cnt = ec3_v.number_input("목표 수치 (원)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=100000)
+                        elif e_unit == "요율": e_cnt = ec3_v.number_input("목표 수치 (%)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=5)
+                        else: e_cnt = ec3_v.number_input("목표 수치 (건)", value=int(target.get('target_count') or 0), key=f"ekc_{t_id}_{i}", step=1)
                         
                         e_wgt = ec4.number_input("배점", value=int(target.get('weight') or 0), key=f"ekw_{t_id}_{i}")
                         e_cyc = ec5.text_input("주기", value=target.get('cycle') or '', key=f"eky_{t_id}_{i}")
                         e_desc = st.text_area("산출식", value=target.get('description') or '', key=f"ekd_{t_id}_{i}")
                         eb1, eb2, _ = st.columns([1, 1, 4])
-                        if eb1.button("💾 메인 지표 저장", type="primary", key=f"esvk_{t_id}_{i}"):
-                            supabase.table('kpi_targets').update({"kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "unit": e_unit, "weight": e_wgt, "cycle": e_cyc, "description": e_desc}).eq('id', t_id).execute()
+                        if eb1.button("💾 저장", type="primary", key=f"esvk_{t_id}_{i}"):
+                            supabase.table('kpi_targets').update({
+                                "kpi_name": e_name, "owner": e_own, "target_count": e_cnt, "unit": e_unit,
+                                "weight": e_wgt, "cycle": e_cyc, "description": e_desc
+                            }).eq('id', t_id).execute()
                             st.session_state['edit_kpi_id'] = None; apply_changes()
                         if eb2.button("취소", key=f"ecank_{t_id}_{i}"):
                             st.session_state['edit_kpi_id'] = None; st.rerun()
                 else:
-                    t_str_format = format_target(target.get('target_count', 0), target.get('unit', '건'))
+                    t_str_format = format_target(target.get('target_count', 0), target.get('unit', '건수'))
                     with st.expander(f"[{target.get('owner')}] {target.get('kpi_name')} (목표: {t_str_format} / 배점: {target.get('weight')}점)"):
                         st.info(f"**📝 산출식 및 가이드:** {target.get('description', '설명글이 없습니다.')}")
                         st.markdown("**🔹 상세 업무(Sub-KPI) 할당 및 리스트**")
@@ -696,16 +707,19 @@ with tab_kpi:
                                     dc1.write(f"**{d.get('detail_name')}** (주기: {d.get('cycle', '미지정')})")
                                     dc1.caption(f"설명: {d.get('description', '')}")
                                     dc2.write(f"👤 담당: {d.get('assignee')}")
-                                    if dc3.button("✏️ 수정", key=f"edit_det_{d_id}"): st.session_state['edit_detail_id'] = d_id; st.rerun()
-                                    if dc4.button("🗑 삭제", key=f"del_det_{d_id}"): supabase.table('kpi_details').delete().eq('id', d_id).execute(); apply_changes()
+                                    if dc3.button("✏️ 수정", key=f"edit_det_{d_id}"):
+                                        st.session_state['edit_detail_id'] = d_id; st.rerun()
+                                    if dc4.button("🗑 삭제", key=f"del_det_{d_id}"):
+                                        supabase.table('kpi_details').delete().eq('id', d_id).execute(); apply_changes()
                         
                         with st.form(key=f"add_det_{t_id}", clear_on_submit=True):
                             st.markdown("**새로운 상세 업무 할당**")
                             c_n, c_a, c_c = st.columns([4, 2, 2])
-                            new_d_name = c_n.text_input("상세 업무명", placeholder="예: 1분기 건강검진안내")
-                            new_d_assig = c_a.selectbox("담당자", all_users)
-                            new_d_cycle = c_c.text_input("주기", placeholder="예: 매월, 1분기")
-                            new_d_desc = st.text_area("상세 설명 (가이드)", placeholder="담당자가 참고할 설명글을 적어주세요.")
+                            # 💡 [버그 픽스] form 내부 위젯 고유 key
+                            new_d_name = c_n.text_input("상세 업무명", placeholder="예: 1분기 건강검진안내", key=f"ndn_{t_id}")
+                            new_d_assig = c_a.selectbox("담당자", all_users, key=f"nda_{t_id}")
+                            new_d_cycle = c_c.text_input("주기", placeholder="예: 매월, 1분기", key=f"ndc_{t_id}")
+                            new_d_desc = st.text_area("상세 설명 (가이드)", placeholder="담당자가 참고할 설명글을 적어주세요.", key=f"ndd_{t_id}")
                             if st.form_submit_button("상세 할당"):
                                 if new_d_name:
                                     supabase.table('kpi_details').insert({
@@ -717,7 +731,7 @@ with tab_kpi:
                         st.markdown("---")
                         b1, b2, _ = st.columns([1.5, 1.5, 5])
                         if b1.button("✏ 메인 지표 수정", key=f"kedt_{t_id}_{i}"): st.session_state['edit_kpi_id'] = t_id; st.rerun()
-                        if b2.button("🗑 메인 지표 완전삭제", key=f"kdel_{t_id}_{i}"): supabase.table('kpi_targets').delete().eq('id', t_id).execute(); apply_changes()
+                        if b2.button("🗑 메인 지표 삭제", key=f"kdel_{t_id}_{i}"): supabase.table('kpi_targets').delete().eq('id', t_id).execute(); apply_changes()
 
     else:
         st.header(f"📈 {target_user} KPI 달성 현황 및 증빙 제출")
@@ -731,7 +745,7 @@ with tab_kpi:
             all_my_targets = my_common + my_personal
             for t in all_my_targets:
                 app, tot, pts, rate, mis = calculate_kpi_score(t, kpi_subs)
-                t_unit = t.get('unit', '건')
+                t_unit = t.get('unit', '건수')
                 t_format = format_target(tot, t_unit)
                 
                 with st.container(border=True):
@@ -810,11 +824,11 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 엑셀 보고서 생성부 
+# 탭 5: 데이터/보고서 전용
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
-    if not is_readonly:
+    if not (u_role == "마스터" and target_user != u_name):
         with st.expander("🛠 등록된 전체 업무 일괄 수정"):
             t1, t2, t3 = st.tabs(["📝 일일 업무", "📁 프로젝트", "📋 하위 세부업무"])
             with t1: e_d_df = st.data_editor(pd.DataFrame(all_daily), key="ed_d", use_container_width=True)
