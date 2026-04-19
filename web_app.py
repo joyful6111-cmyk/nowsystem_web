@@ -7,7 +7,7 @@ import time
 from streamlit_cookies_controller import CookieController
 
 # 1. 웹페이지 설정
-st.set_page_config(page_title="NOWSYSTEM 관제탑 V53", layout="wide")
+st.set_page_config(page_title="NOWSYSTEM 관제탑 V54 (대시보드 가독성 개편)", layout="wide")
 
 # 쿠키 컨트롤러
 cookie_controller = CookieController()
@@ -32,7 +32,7 @@ except Exception as e:
     st.error("데이터베이스 연결에 실패했습니다.")
     st.stop()
 
-# 💡 [버그 픽스] fixed_contents 테이블 로드 추가 완료
+# 💡 실시간 반영을 위해 캐시 완전 제거됨 (신규 테이블 포함)
 def load_db_data():
     try:
         daily = supabase.table('daily').select("*").execute().data or []
@@ -124,7 +124,14 @@ def get_monday(date_obj):
     return date_obj - datetime.timedelta(days=date_obj.weekday())
 current_monday_str = get_monday(today_kst).strftime("%Y-%m-%d")
 
-# 넓은 메인화면 출력용 게시판 렌더링 함수
+# 💡 게시판 기본 안내 문구 생성 함수
+def get_board_notice(board_type):
+    notice = "- 해당 게시판은 공용으로 사용하는 게시판입니다.\n"
+    if board_type in ["세금계산서", "분납서", "보증보험"]:
+        notice += "- 다음주 월요일이면 지난주 내용이 자동 삭제됩니다.\n- 해당 게시판은 일일업무 등록 시 연동으로 등록이 가능합니다."
+    return notice
+
+# 💡 넓은 메인화면 출력용 게시판 렌더링 함수
 def render_shared_board_full_width(board_type, title, is_weekly=False):
     c_back, _ = st.columns([2, 8])
     if c_back.button("🔙 메인 화면으로 돌아가기", type="primary", use_container_width=True):
@@ -133,11 +140,7 @@ def render_shared_board_full_width(board_type, title, is_weekly=False):
         
     st.header(title)
     
-    # 안내문구 출력
-    notice = "- 해당 게시판은 공용으로 사용하는 게시판입니다.\n"
-    if board_type in ["세금계산서", "분납서", "보증보험"]:
-        notice += "- 다음주 월요일이면 지난주 내용이 자동 삭제됩니다.\n- 해당 게시판은 일일업무 등록 시 연동으로 등록이 가능합니다."
-    st.info(notice)
+    st.info(get_board_notice(board_type))
     st.divider()
     
     boards = [b for b in shared_boards if b.get('board_type') == board_type]
@@ -241,7 +244,6 @@ with st.sidebar:
         except Exception: pass
         st.session_state['logged_in'] = False; st.rerun()
 
-# 💡 사이드바 게시판 버튼이 눌렸을 때 메인 화면 전체를 덮어쓰는 로직
 if st.session_state.get('active_modal_board'):
     b_type, b_title, b_weekly = st.session_state['active_modal_board']
     render_shared_board_full_width(b_type, b_title, b_weekly)
@@ -762,29 +764,38 @@ with tab_kpi:
         my_common = [t for t in kpi_targets if t.get('owner') == '공통']
         my_personal = [t for t in kpi_targets if t.get('owner') == target_user]
         
-        st.subheader("🏆 현재 스코어 보드")
+        st.subheader("🏆 한눈에 보는 나의 KPI 스코어 보드")
         if not my_common and not my_personal:
             st.info("할당된 KPI 지표가 없습니다.")
         else:
+            # 💡 [가독성 개편] 3열 그리드 레이아웃 적용
             all_my_targets = my_common + my_personal
-            for t in all_my_targets:
-                app, tot, pts, rate, mis = calculate_kpi_score(t, kpi_subs)
-                t_unit = t.get('unit', '건수')
-                t_format = format_target(tot, t_unit)
-                
-                with st.container(border=True):
-                    st.markdown(f"### [{t['owner']}] {t['kpi_name']}")
-                    st.info(f"**💡 산출식 및 설명:** {t.get('description', '설명글이 없습니다.')}")
+            num_cols = 3
+            rows = [all_my_targets[i:i + num_cols] for i in range(0, len(all_my_targets), num_cols)]
+            
+            for row in rows:
+                cols = st.columns(num_cols)
+                for j, t in enumerate(row):
+                    app, tot, pts, rate, mis = calculate_kpi_score(t, kpi_subs)
+                    t_unit = t.get('unit', '건수')
+                    t_format = format_target(tot, t_unit)
                     
-                    mc1, mc2, mc3 = st.columns(3)
-                    mc1.write(f"- **🎯 목표:** {t_format}")
-                    mc2.write(f"- **⏱️ 주기:** {t.get('cycle', '미지정')}")
-                    mc3.write(f"- **⭐️ 배점:** {t.get('weight', 0)}점")
-                    
-                    if "누락" in t['kpi_name'] or "법정" in t['kpi_name']:
-                        st.error(f"**📊 달성 현황:** 누락 {mis}건 (부서 총 {app}건 승인) ➔ **{pts}점 획득**")
-                    else:
-                        st.success(f"**📊 달성 현황:** 달성률 {round(rate, 1)}% (내 승인 {app}건) ➔ **{pts}점 획득**")
+                    with cols[j].container(border=True):
+                        st.markdown(f"**[{t['owner']}] {t['kpi_name']}**")
+                        # 진행률 프로그레스 바
+                        st.progress(min(int(rate), 100))
+                        
+                        if "누락" in t['kpi_name'] or "법정" in t['kpi_name']:
+                            st.markdown(f"<h3 style='color:#E53935; margin-bottom:0;'>{pts}점 <small style='font-size:0.5em; color:gray;'>/ {t.get('weight', 0)}점</small></h3>", unsafe_allow_html=True)
+                            st.caption(f"🚨 누락 {mis}건 (승인 {app}) / 목표 {t_format}")
+                        else:
+                            st.markdown(f"<h3 style='color:#43A047; margin-bottom:0;'>{pts}점 <small style='font-size:0.5em; color:gray;'>({round(rate,1)}%)</small></h3>", unsafe_allow_html=True)
+                            st.caption(f"✅ 승인 {app} / 목표 {t_format}")
+                            
+                        with st.expander("상세 정보 및 산출식"):
+                            st.write(f"- **주기:** {t.get('cycle', '미지정')}")
+                            st.write(f"- **배점:** {t.get('weight', 0)}점")
+                            st.info(f"{t.get('description', '설명없음')}")
 
         st.divider()
         
@@ -848,7 +859,7 @@ with tab_kpi:
                             supabase.table('kpi_submissions').delete().eq('id', s['id']).execute(); apply_changes()
 
 # ==========================================
-# 탭 5: 데이터/보고서 전용
+# 탭 5: 데이터/보고서
 # ==========================================
 with tab_rep:
     st.header("📊 데이터 및 보고서 관리")
@@ -940,11 +951,9 @@ with tab_rep:
         s_w, e_w = c_ds1.date_input("시작일", today_kst - datetime.timedelta(days=7), key="ws"), c_ds2.date_input("종료일", today_kst, key="we")
         s_w_str, e_w_str = s_w.strftime("%Y-%m-%d"), e_w.strftime("%Y-%m-%d")
         
-        st.markdown("**📝 업무 분류별 주간 고정 내용 입력** (엑셀 출력용)")
-        st.info("입력된 내용은 이번 엑셀 파일에만 포함되며, 데이터베이스에 영구 저장되지 않습니다.")
-        
+        st.markdown("**📝 업무 분류별 주간 고정 내용 관리** (엑셀 출력용)")
         excel_sort_order = ["경영", "재무", "입찰", "조달", "지원", "R&D", "현장", "요청사항"]
-        fixed_notes = {}
+        
         with st.expander("고정 내용 입력 열기"):
             for cat in excel_sort_order:
                 f_record = next((f for f in fixed_contents if f.get('category_name') == cat), None)
@@ -953,7 +962,8 @@ with tab_rep:
                 
                 with st.container(border=True):
                     f_col1, f_col2 = st.columns([8, 2])
-                    f_input = f_col1.text_area(f"[{cat}]", value=f_text, key=f"f_input_{cat}", height=68, label_visibility="collapsed")
+                    # 💡 [요청사항 수정] 라벨 숨김 옵션 삭제 -> 텍스트 명시 표출로 가독성 개선
+                    f_input = f_col1.text_area(f"📌 [{cat}] 업무 고정 내용", value=f_text, key=f"f_input_{cat}", height=68)
                     
                     fb1, fb2 = f_col2.columns(2)
                     if fb1.button("저장", key=f"fsave_{cat}"):
